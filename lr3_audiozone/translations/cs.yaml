@@ -18,10 +18,27 @@ configuration:
       Kvalita streamu ze Spotify Connect (librespot): 96, 160 nebo 320 kbps.
       Vyžaduje Spotify Premium účet.
   zone_name:
-    name: Název Spotify zařízení
+    name: Náhradní název zařízení
     description: >-
-      Jméno, pod kterým se addon objeví v aplikaci Spotify jako Connect zařízení
-      (= název audio zóny). Pustíš do něj hudbu a addon ji přepošle do LARA rádií.
+      Použije se jen tehdy, když addon při startu nenajde v síti žádné LARA rádio — pak
+      vytvoří jedno takto pojmenované Spotify zařízení, které bude řídit rádio, jež se
+      připojí později. Když se rádia najdou, zařízení se jmenují podle nich.
+  group_name:
+    name: Název skupinového zařízení
+    description: >-
+      Jméno Spotify zařízení, které hraje do všech rádií najednou. Objeví se, jen když
+      jsou nalezena aspoň dvě rádia — u jednoho by to byl jen druhý název pro totéž.
+  lara_name_prefix:
+    name: Přidat před názvy „LARA"
+    description: >-
+      Zapnuto: zařízení se ve Spotify jmenují „LARA Obývák", „LARA Kuchyň" — drží v seznamu
+      pohromadě a je jasné, co to je. Vypnuto: použije se jméno rádia tak, jak je nastavené
+      v LAŘE. Rádia, která už „LARA" ve jméně mají, se nepředsazují dvakrát.
+  scan_subnet:
+    name: Podsíť k prohledání
+    description: >-
+      Nech prázdné a addon prohledá podsíť, ve které sám je. Vyplň jen tehdy, když jsou
+      rádia jinde — první tři čísla adresy, např. „10.0.0".
   zone_volume:
     name: Výchozí hlasitost zóny (%)
     description: >-

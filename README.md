@@ -2,36 +2,47 @@
 
 [![Přidat repozitář do Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fvlioscz%2FLR3-AudioZone)
 
-**Spotify Connect → ELKO EP „LARA".** Zapneš na mobilu Spotify Connect zařízení, které vytvoří
-tento addon, a hudba se **automaticky přehraje na LARA rádiích** — addon se tváří jako
-**Slim server** a přepne LARA do její **audio zóny**. Když Spotify přestaneš poslouchat,
-LARA se po nastavené prodlevě **zase vypne**. Žádné záložní rádio, žádné presety.
+**Spotify Connect → ELKO EP „LARA".** Addon najde LARA rádia v síti a **každé z nich nabídne
+ve Spotify jako samostatné Connect zařízení** pojmenované podle toho rádia — plus „LARA All",
+které hraje do všech naráz. Vybereš si v mobilu, kam pustit hudbu, a addon rádio přepne do jeho
+**audio zóny** (tváří se jako **Slim server**). Když dohraješ, rádio se vrátí na seznam stanic.
+Žádné záložní rádio, žádné presety.
 
 > Sesterský projekt **[LR3-Stream](https://github.com/vlioscz/LR3-stream-addon)** je čistý stabilní
 > stream + Spotify Connect (bez ovládání rádií). **LR3-AudioZone** přidává výstup do LARA přes Slim.
 
 ```
-Spotify Connect (librespot) ──► Liquidsoap ──► Icecast /default ─┐
-                                                                 │  (LARA si stream stáhne)
-        SlimProto server (:3483) ── strm ──► LARA rádia ◄────────┘
-        LMS CLI server  (:9595) ◄─ stav + tlačítka ─┘
+ „LARA Koupelna"  librespot ─► Liquidsoap ─► Icecast /lara_f2231c ──► LARA Koupelna
+ „LARA Obývák"    librespot ─► Liquidsoap ─► Icecast /lara_aabbcc ──► LARA Obývák
+ „LARA All"       librespot ─► Liquidsoap ─► Icecast /all ─────────► obě zároveň
+
+        SlimProto server (:3483) ── strm ──► rádia  (řekne jim, co stáhnout)
+        LMS CLI server  (:9595) ◄── stav + tlačítka ── rádia
 ```
 
 ## Jak to funguje
 
-1. **librespot** vytvoří Spotify Connect zařízení pojmenované podle `zone_name` (např. „Audio zóna").
-2. Jeho zvuk teče přes **Liquidsoap** do **Icecast** mountu `/default`. Když Spotify nehraje,
+1. Při startu addon **projde síť a najde LARA rádia** i s jejich jmény (sken TCP 61695).
+2. Pro **každé rádio** spustí vlastní **librespot** → ve Spotify se objeví jako samostatné
+   Connect zařízení pojmenované podle toho rádia (např. „LARA Koupelna").
+   Když jsou rádia **dvě a víc**, přibude ještě **„LARA All"**, které hraje do všech najednou.
+   U jediného rádia se skupinové zařízení nezobrazí — byl by to jen druhý název pro totéž.
+3. Zvuk každé zóny teče přes **Liquidsoap** do vlastního **Icecast** mountu. Když Spotify nehraje,
    teče do mountu ticho — mount tak nikdy nespadne a LARA ho může kdykoli začít stahovat.
-3. Addon je zároveň **Slim server** — dvě služby:
+4. Addon je zároveň **Slim server** — dvě služby:
    - **SlimProto** na TCP `:3483` — přenos zvuku, hlasitost, zapnutí/vypnutí výstupů.
    - **LMS CLI** na TCP `:9595` — textový kanál, kterým se LARA ptá, co hraje, a kterým
      posílá stisky svých vlastních tlačítek zpět nám.
-4. Když se Spotify rozehraje, addon pošle LAŘE `strm-s` → **LARA se přepne do audio zóny** a hraje.
-   Posuvník hlasitosti v aplikaci Spotify přitom **ovládá přímo hlasitost LARY** — stream samotný
-   se neztlumuje, takže nevznikne skrytý druhý regulátor, kterým by šlo omylem „vypnout zvuk".
-5. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q`, ztlumí výstupy a
-   přes port 61695 **vrátí LARU na seznam rádií — zastavenou**, aby zóna nezůstala viset na
+5. Když se Spotify rozehraje, addon pošle dotčeným rádiům `strm-s` → **přepnou se do audio zóny**
+   a hrají. Vlastní zařízení rádia má přednost před skupinovým: pustíš-li hudbu do „LARA Koupelna"
+   uprostřed skupinového poslechu, koupelna se odpojí a ostatní hrají dál.
+6. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q`, ztlumí výstupy a
+   přes port 61695 **vrátí rádio na seznam stanic — zastavené**, aby zóna nezůstala viset na
    displeji a rádio bylo připravené pro toho, kdo k němu přijde.
+
+> **Nové rádio v síti?** Sada Connect zařízení se určuje při startu — po přidání rádia
+> **restartuj add-on**. Do té doby ho addon sice řídí (jede v „LARA All"), ale vlastní
+> zařízení ve Spotify nedostane.
 
 ## Předpoklad: nasměruj LARA na HA jako slim server
 
@@ -48,7 +59,10 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `source_password` | `changeme` | Interní heslo Icecastu. LARA ho nepotřebuje. |
 | `bitrate` | `192` | Bitrate MP3 posílaného do LARA (kbps). |
 | `spotify_bitrate` | `320` | Kvalita Spotify (96/160/320). |
-| `zone_name` | `Audio zóna` | Název Spotify Connect zařízení = název audio zóny. |
+| `zone_name` | `Audio zóna` | Náhradní název — použije se, jen když se nenajde žádné rádio. |
+| `group_name` | `LARA All` | Název zařízení hrajícího do všech rádií (jen při 2+ rádiích). |
+| `lara_name_prefix` | `true` | Předsadit názvům „LARA " („LARA Kuchyň" vs. „Kuchyň"). |
+| `scan_subnet` | prázdné | Podsíť k prohledání, např. `10.0.0`. Prázdné = ta, ve které je HA. |
 | `zone_volume` | `90` | Výchozí hlasitost zóny, dokud nepohneš posuvníkem ve Spotify. `0` = hlasitost LARY neměnit. |
 | `buffer_seconds` | `1.5` | Kolik sekund si LARA načte, než začne hrát = hlavní zdroj zpoždění. Níž = svižnější, ale hrozí výpadky. |
 | `idle_timeout` | `8` | Sekundy nečinnosti Spotify, než LARA opustí zónu = jak dlouho zóna po zastavení hudby ještě visí na displeji. |

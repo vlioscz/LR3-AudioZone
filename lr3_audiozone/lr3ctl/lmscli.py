@@ -56,14 +56,16 @@ class LmsCliServer:
     """Answers the LARA's LMS CLI queries and mirrors SlimProto state to it."""
 
     def __init__(self, slim, port: int = DEFAULT_CLI_PORT, username: str = "",
-                 password: str = "", zone_name: str = "Audio zóna", mount: str = "default",
-                 on_command=None):
+                 password: str = "", zone_names: dict | None = None,
+                 fallback_name: str = "Audio zóna", on_command=None):
         self.slim = slim
         self.port = port
         self.username = username
         self.password = password
-        self.zone_name = zone_name
-        self.mount = mount
+        # mount -> Spotify device name, shared (by reference) with the controller: a radio can
+        # be on its own zone or on the group one, and the display should say which.
+        self.zone_names = zone_names if zone_names is not None else {}
+        self.fallback_name = fallback_name
         self.on_command = on_command   # async callback(player_mac, verb) for play/stop/power
         self._listeners: set[asyncio.StreamWriter] = set()
         self._session_start: dict[int, float] = {}   # id(writer) -> when this CLI session opened
@@ -119,6 +121,10 @@ class LmsCliServer:
         out.extend(str(v) for v in values)
         return out
 
+    def _zone(self, player) -> str:
+        """Name of the zone this player is currently on — what its display should show."""
+        return self.zone_names.get(player.current_mount or "", self.fallback_name)
+
     def _players(self) -> list:
         return list(self.slim.players.values())
 
@@ -150,7 +156,7 @@ class LmsCliServer:
         ]
 
     def _status_fields(self, p) -> list[str]:
-        title = p.title or self.zone_name
+        title = p.title or self._zone(p)
         return [
             f"player_name:{p.name}",
             "player_connected:1",
@@ -177,8 +183,8 @@ class LmsCliServer:
         return [
             "playlist index:0",
             "id:-1",
-            f"title:{p.title or self.zone_name}",
-            f"artist:{self.zone_name}",
+            f"title:{p.title or self._zone(p)}",
+            f"artist:{self._zone(p)}",
             "album:Spotify Connect",
             f"url:{self.slim.stream_url(p.current_mount)}",
             "remote:1",
@@ -285,10 +291,10 @@ class LmsCliServer:
             return self._reply(tokens, 0)
 
         if verb in ("artist", "album", "genre"):
-            return self._reply(tokens, self.zone_name if p.current_mount else "")
+            return self._reply(tokens, self._zone(p) if p.current_mount else "")
 
         if verb in ("title", "current_title"):
-            return self._reply(tokens, (p.title or self.zone_name) if p.current_mount else "")
+            return self._reply(tokens, (p.title or self._zone(p)) if p.current_mount else "")
 
         if verb == "path":
             return self._reply(tokens, self.slim.stream_url(p.current_mount) if p.current_mount else "")
@@ -350,7 +356,7 @@ class LmsCliServer:
             if what == "path":
                 return self._reply(tokens, self.slim.stream_url(p.current_mount) if p.current_mount else "")
             if what == "name":
-                return self._reply(tokens, self.zone_name)
+                return self._reply(tokens, self._zone(p))
             return self._reply(tokens, 0) if tokens[-1] == "?" else tokens
 
         # --- library browsing: we have no library, say so cleanly ------------
@@ -370,7 +376,7 @@ class LmsCliServer:
             return
         lines: list[list[str]] = []
         if what in ("play", "connect"):
-            lines.append([player.mac, "playlist", "newsong", player.title or self.zone_name, "0"])
+            lines.append([player.mac, "playlist", "newsong", player.title or self._zone(player), "0"])
         elif what == "stop":
             lines.append([player.mac, "playlist", "stop"])
         elif what == "power":
@@ -379,7 +385,7 @@ class LmsCliServer:
             lines.append([player.mac, "mixer", "volume", str(player.volume)])
         elif what == "mode":
             if player.mode == "play":
-                lines.append([player.mac, "playlist", "newsong", player.title or self.zone_name, "0"])
+                lines.append([player.mac, "playlist", "newsong", player.title or self._zone(player), "0"])
             else:
                 lines.append([player.mac, "playlist",
                               "pause" if player.mode == "pause" else "stop"])

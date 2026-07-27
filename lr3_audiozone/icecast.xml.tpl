@@ -5,7 +5,8 @@
 
     <limits>
         <clients>50</clients>
-        <sources>10</sources>
+        <!-- One source per zone: one per radio, plus the "all radios" group. -->
+        <sources>25</sources>
         <queue-size>524288</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>

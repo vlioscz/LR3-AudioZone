@@ -18,10 +18,27 @@ configuration:
       Spotify Connect (librespot) streaming quality: 96, 160 or 320 kbps.
       Requires a Spotify Premium account.
   zone_name:
-    name: Spotify device name
+    name: Fallback device name
     description: >-
-      The name the add-on shows in the Spotify app as a Connect device (= the
-      audio-zone name). Play to it and the add-on pushes the audio to the LARA radios.
+      Only used when the add-on finds no LARA on the network at start-up: it then offers a
+      single device under this name, which will drive whichever radio connects later. When
+      radios are found, the devices are named after them instead.
+  group_name:
+    name: Group device name
+    description: >-
+      Name of the Spotify device that plays to every radio at once. It only appears when at
+      least two radios are found - with one it would just be a second name for the same speaker.
+  lara_name_prefix:
+    name: Prefix names with "LARA"
+    description: >-
+      On: devices appear in Spotify as "LARA Living room", "LARA Kitchen" - they stay together
+      in the list and it is obvious what they are. Off: the radio's own configured name is used
+      as-is. Radios whose name already starts with "LARA" are never prefixed twice.
+  scan_subnet:
+    name: Subnet to scan
+    description: >-
+      Leave empty and the add-on scans the subnet it is on. Set it only if the radios live
+      elsewhere - the first three numbers of the address, e.g. "10.0.0".
   zone_volume:
     name: Default zone volume (%)
     description: >-

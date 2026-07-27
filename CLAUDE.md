@@ -47,27 +47,50 @@ lr3_audiozone/
   build.yaml         arm64/amd64 Debian base images
   Dockerfile         apt: icecast2 liquidsoap ffmpeg jq dbus avahi-daemon python3
                      + librespot from the raspotify .deb; COPY lr3ctl -> /opt/lr3ctl
-  run.sh             PID 1: dbus+avahi, Icecast, one Liquidsoap (Spotify -> /default),
-                     the controller; writes the librespot --onevent hook
+  run.sh             PID 1: dbus+avahi, Icecast, the controller; writes the librespot
+                     --onevent hook. Liquidsoap is started by the controller, per zone.
   icecast.xml.tpl    Icecast config template
   radio.liq.tpl      Liquidsoap: librespot (Spotify) -> silence. Nothing else.
   translations/      config UI labels (cs, en)
   lr3ctl/            the controller (Python, stdlib only)
-    controller.py    asyncio loop: discovery + the Spotify-active -> zone on/off state machine
+    controller.py    zones (one per radio + group), pipeline supervision, the on/off machine
     slimproto.py     SlimProto server :3483 — strm/aude/audg, STAT parsing
     lmscli.py        LMS CLI server :9595 — the LARA's control/display channel
-    discovery.py     UDP-broadcast discovery
+    discovery.py     UDP broadcast + the TCP /24 sweep that actually finds them
     elkoproto.py     ELKO 61695 protocol (obfuscation, builders, parsers)
     laradev.py       one LARA over 61695 — `park_on_radio()` on zone-off
 ```
 
+## Zones — one Spotify device per radio
+
+Since 0.3.0 the add-on is **multi-radio**. At start-up `controller.py` sweeps the LAN
+(`discovery.find_radios`), reads each LARA's own name, and brings up **one pipeline per radio**:
+its own librespot (→ its own Spotify Connect device), Liquidsoap and Icecast mount.
+
+| radios found | Spotify devices |
+|---|---|
+| 0 | one, named `zone_name` — drives whatever dials in later (discovery may be blocked) |
+| 1 | just that radio (a group device would be a second name for the same speaker) |
+| ≥2 | one per radio **plus** `group_name` ("LARA All") feeding all of them |
+
+Mounts: `lara_<last 6 MAC hex>` per radio, `all` for the group, `default` for the no-radio
+fallback. Device names come from the radio's config, optionally prefixed "LARA "
+(`lara_name_prefix`; never doubled if the name already starts with LARA). Duplicate names get a
+MAC tail. `Controller.render_liq()` fills `radio.liq.tpl` per zone — **`run.sh` no longer starts
+Liquidsoap**, the controller owns those processes and restarts any that die (`supervise_zones`).
+
+**The device set is fixed at start-up** (deliberate — the alternative churns processes). A radio
+that only turns up later on SlimProto is added to the inventory and follows the group zone, but
+gets no device of its own until the add-on restarts; the log says so.
+
 ## How routing works
 
-`controller.py` runs an asyncio loop: every 60 s it discovers LARAs (UDP broadcast); every 1 s it
-`tick()`s. The Spotify-active flag comes from `librespot --onevent` writing
-`/tmp/spotify_state_default` ("playing"/"paused"/…). Every known radio follows the single mount
-`default`. A LARA that dials in on :3483 is **added to the inventory even if UDP discovery never
-saw it** (`on_slim_connect`), so the add-on works on networks that eat broadcasts.
+`controller.py` `tick()`s every second. The per-zone Spotify-active flag comes from
+`librespot --onevent` writing `/tmp/spotify_state_<mount>`. For each radio, `zone_for()` walks
+the zones — **specific zones first, group last** — and takes the first active one that covers it,
+so playing to a radio's own device pulls it out of a group session without touching the others.
+A LARA that dials in on :3483 is **added to the inventory even if the scan never saw it**
+(`on_slim_connect`), so the add-on works on networks that eat broadcasts.
 
 - Spotify active → `slim.push_stream(mac, "default")`: `aude 1 1` (power on) + `strm-s` to
   `http://<our_ip>:<port>/default` + `audg`.
@@ -104,8 +127,13 @@ Implemented in **`lr3_audiozone/lr3ctl/elkoproto.py`** (self-tested against capt
 
 - **Obfuscation**: whole packet XORed with a fixed 1024-byte mask (embedded base64 in elkoproto.py),
   keyed by a random 0–699 int; magic header `FF FA FA FF`. `admin`/`elkoep` defaults.
-- **Discovery = UDP broadcast** to `255.255.255.255:61695`; reply → DeviceID==3 = LARA; gives
-  ip/name(win-1250)/mac/fw. Key radios by **MAC** (stable across DHCP).
+- **Discovery**: the probe is documented as a **UDP broadcast** to `255.255.255.255:61695`
+  (reply → DeviceID==3 = LARA; gives ip/name(win-1250)/mac/fw). ⚠️ **fw 3.7.001 never answers
+  it** — not broadcast, not directed broadcast, not unicast, no variant byte helps. The identical
+  probe sent over **TCP 61695** answers instantly and `parse_discovery_reply` takes it unchanged.
+  That TCP probe is the **only** source of the device's user-assigned name (e.g. "LARA Koupelna"),
+  which the add-on needs to name Spotify devices — hence `discovery.find_radios()` sweeps the
+  local /24 on TCP. Key radios by **MAC** (stable across DHCP).
 - **Control = TCP 61695** (connect-per-command): select_source (RADIO=1/AUX=3/DLNA=4),
   select_station(index), play/stop/volume, read status/stations. ⚠️ config-read leaks plaintext
   passwords → never log raw packets. ⚠️ never blind-write presets (a write Saves the whole list).

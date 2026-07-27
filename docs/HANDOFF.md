@@ -83,6 +83,27 @@ controller state machine handles on/idle/off/resume plus SlimProto-only discover
 **Answered on HA:** the loop works end to end, latency is acceptable after the buffer work, and
 the switch back to the radio list works.
 
+## 0.3.0 — multi-radio
+
+One Spotify Connect device per LARA (named after the radio), plus "LARA All" when there are two
+or more. Nothing to configure: the add-on scans the LAN at start-up and names the devices from
+what the radios report. See CLAUDE.md "Zones" for the mount/name rules.
+
+**The discovery finding that made it possible:** fw 3.7.001 does **not** answer UDP discovery on
+61695 — verified against the device with broadcast, directed broadcast and unicast, and every
+variant byte 0-4. Nothing comes back. The *same probe over TCP* answers immediately with the full
+record including the user-assigned name ("LARA Koupelna"), and `parse_discovery_reply` eats it
+unchanged. So `discovery.find_radios()` = UDP broadcast (kept, other firmware may answer) +
+explicit `lara_hosts` + a threaded TCP sweep of the /24. The sweep is what actually works, and
+it is the only source of radio names — without it there is nothing to call the Spotify devices.
+
+Watch out when writing probe helpers: `socket.timeout` is a subclass of `OSError`, so a bare
+`except OSError` around the read loop throws away the reply that already arrived. That bug made
+the sweep return nothing while a hand-written one-shot probe worked.
+
+Also note `run.sh` no longer starts Liquidsoap — the controller renders `radio.liq.tpl` per zone,
+spawns one Liquidsoap each, restarts any that die, and kills them on SIGTERM.
+
 **Left**
 1. **The Spotify volume slider disappeared.** `--volume-ctrl fixed` removes the Connect device's
    volume capability outright, so this librespot emits no volume event at all and
@@ -94,7 +115,11 @@ the switch back to the radio list works.
    does that.
 2. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
    not ours. Calibrate `zone_volume` by ear.
-3. **Multiple LARAs** at once; mount-switch latency.
+3. **Multi-radio has only ever run against one LARA** — the zone logic is covered by offline
+   tests (device set, precedence, routing, rendering) but a second physical radio has never
+   been in the room. Worth watching when one appears: CPU with N+1 encoders, whether both
+   radios stay in sync on the group mount, and mount-switch latency when a radio moves between
+   its own zone and the group.
 
 Testing without deploying the add-on:
 ```

@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""LR3 LARA controller — Spotify plays → LARA switches to the Slim audio zone; idle → LARA off.
+"""LR3 LARA controller — one Spotify Connect device per radio, plus an "all radios" one.
 
-There is no fallback radio any more. The Icecast mount carries Spotify (and silence when
-Spotify is idle, so the mount never dies), and the LARA is only *in* the audio zone while
-Spotify is actually playing:
+At start-up the add-on looks for LARAs on the LAN, reads the name each one carries in its own
+configuration, and brings up **one audio pipeline per radio**: its own librespot (so it shows
+up in the Spotify app under the radio's name), its own Liquidsoap and its own Icecast mount.
+With two or more radios it also creates a group device (`group_name`, "LARA All") that feeds
+every radio at once. With a single radio the group would be a duplicate of it, so it is left out.
 
-    Spotify active  ->  strm-s (+ aude on)                 -> LARA plays the audio zone
-    Spotify idle    ->  strm-q (+ aude off) + RADIO/stop   -> after `idle_timeout` the LARA
-                        goes back to its station list, prepared but not playing
+    Spotify plays to "LARA Koupelna"  ->  that radio joins the zone and plays
+    Spotify plays to "LARA All"       ->  every radio joins the zone and plays the same mount
+    Spotify idle for `idle_timeout`   ->  radios drop out and return to their station list
 
-Two server sockets drive the LARA:
-  * :3483  SlimProto — audio transport + power/volume  (`slimproto.py`)
-  * :9595  LMS CLI   — the LARA's control/display channel; also carries its button presses
-                       back to us  (`lmscli.py`)
+A radio's own device always wins over the group, so starting playback on one radio pulls it out
+of a group session without disturbing the others.
 
-control_mode:
-  slimproto — the real thing (default).
-  off       — discover + log radios only, never switch (safe for testing).
+The set of devices is fixed at start-up: a radio switched on later is still driven (it joins the
+group and can be pushed), but it gets no Connect device of its own until the add-on restarts.
+
+control_mode: `slimproto` (default) or `off` (stream only, never touch the radios).
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import socket
 import sys
 import time
@@ -39,7 +41,9 @@ log = logging.getLogger("lr3.ctl")
 
 OPTIONS = "/data/options.json"
 STATE_DIR = "/tmp"
-MOUNT = "default"  # the single audio-zone mount every LARA plays
+LIQ_TEMPLATE = "/etc/lr3/radio.liq.tpl"
+GROUP_MOUNT = "all"        # the "every radio" zone
+FALLBACK_MOUNT = "default"  # used only when no radio could be found at start-up
 ACTIVE_EVENTS = {"playing", "started", "track_changed", "changed", "loading", "preloading"}
 
 
@@ -59,7 +63,7 @@ def host_ip() -> str:
         s.close()
 
 
-def spotify_active(mount: str = MOUNT) -> bool:
+def spotify_active(mount: str) -> bool:
     try:
         with open(os.path.join(STATE_DIR, f"spotify_state_{mount}")) as f:
             return f.read().strip() in ACTIVE_EVENTS
@@ -67,13 +71,14 @@ def spotify_active(mount: str = MOUNT) -> bool:
         return False
 
 
-def spotify_volume(mount: str = MOUNT) -> int | None:
-    """The Spotify app's volume slider, 0-100, or None if it has never been touched.
+def spotify_volume(mount: str) -> int | None:
+    """The Spotify app's volume slider for this zone, 0-100, or None if never reported.
 
-    librespot is run with `--volume-ctrl fixed` so the slider does NOT attenuate the audio
-    (a hidden second volume control is how you end up with a silent zone nobody can explain).
-    Instead the position lands here and we send it to the LARA as `audg` — the slider then
-    controls the real thing. librespot reports 0-65535; older builds report 0-100.
+    librespot runs with `--volume-ctrl fixed` so the slider does NOT attenuate the audio (a
+    hidden second volume control is how you end up with a silent zone nobody can explain).
+    Note that `fixed` also removes the Connect device's volume capability altogether on current
+    librespot builds, so in practice this file never appears and the LARA's own knob rules.
+    Kept because it costs nothing and starts working the day librespot reports volume again.
     """
     try:
         with open(os.path.join(STATE_DIR, f"spotify_volume_{mount}")) as f:
@@ -83,6 +88,25 @@ def spotify_volume(mount: str = MOUNT) -> int | None:
     return max(0, min(100, round(raw / 65535 * 100) if raw > 100 else raw))
 
 
+class Zone:
+    """One Spotify Connect device = one librespot + one Liquidsoap + one Icecast mount."""
+
+    def __init__(self, mount: str, name: str, radios: list[str] | None):
+        self.mount = mount
+        self.name = name
+        self.radios = radios   # None = every radio we know about
+
+    def covers(self, mac: str) -> bool:
+        return self.radios is None or mac in self.radios
+
+    @property
+    def is_group(self) -> bool:
+        return self.radios is None
+
+    def __repr__(self):
+        return f"<Zone {self.mount} {self.name!r} {'ALL' if self.is_group else self.radios}>"
+
+
 class Controller:
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -90,8 +114,13 @@ class Controller:
         self.user = opt(cfg, "lara_username", "admin")
         self.password = opt(cfg, "lara_password", "elkoep")
         self.hosts = opt(cfg, "lara_hosts", [])
+        self.subnet = (opt(cfg, "scan_subnet", "") or "").strip() or None
         self.port = opt(cfg, "port", 8121)
-        self.zone_name = opt(cfg, "zone_name", "Audio zóna")
+        self.source_password = opt(cfg, "source_password", "changeme")
+        self.spotify_bitrate = opt(cfg, "spotify_bitrate", 320)
+        self.fallback_name = opt(cfg, "zone_name", "Audio zóna")
+        self.group_name = opt(cfg, "group_name", "LARA All")
+        self.name_prefix = bool(opt(cfg, "lara_name_prefix", True))
         self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 8)))
         self.volume = int(opt(cfg, "zone_volume", 90))
         # How much audio the LARA buffers before it starts = the dominant latency in the
@@ -105,8 +134,11 @@ class Controller:
         self.cli_pass = opt(cfg, "cli_password", "")
         self.our_ip = host_ip()
         self.radios: dict[str, dict] = {}          # mac -> {rec, dev}
+        self.zones: list[Zone] = []                # specific zones first, group last
+        self.zone_names: dict[str, str] = {}       # mount -> display name (for the LMS CLI)
+        self.procs: dict[str, asyncio.subprocess.Process] = {}
         self.target: dict[str, str | None] = {}    # mac -> mount currently pushed
-        self.idle_since: dict[str, float] = {}     # mac -> when Spotify went idle
+        self.idle_since: dict[str, float] = {}     # mac -> when its zone went idle
         self.applied_volume: dict[str, int] = {}   # mac -> volume we last sent
         self.slim: SlimProtoServer | None = None
         self.cli: LmsCliServer | None = None
@@ -116,32 +148,126 @@ class Controller:
     # --- inventory -------------------------------------------------------------
     def _add(self, key: str, rec: dict, how: str):
         if key in self.radios:
-            return
+            return False
         ip = rec.get("ip")
         self.radios[key] = {
             "rec": rec,
             "dev": laradev.LaraDevice(ip, self.user, self.password) if ip else None,
         }
-        log.info("radio (%s): %-16s %-15s fw=%s %s", how, rec.get("name", "?"),
+        log.info("radio (%s): %-20s %-15s fw=%s %s", how, rec.get("name", "?"),
                  ip, rec.get("fw", "?"), key)
+        return True
 
     def discover(self):
-        for mac, rec in discovery.discover(timeout=2.0, retries=2).items():
+        """One sweep at start-up. UDP broadcast is useless on fw 3.7.001, the TCP scan is not."""
+        found = discovery.find_radios(hosts=self.hosts, subnet=self.subnet)
+        for mac, rec in found.items():
             self._add(mac, rec, "discovery")
-        for h in self.hosts:
-            if any(r["rec"].get("ip") == h for r in self.radios.values()):
-                continue
-            self._add("ip:" + h, {"ip": h, "name": h, "mac": "ip:" + h}, "manual")
+
+    # --- zones -----------------------------------------------------------------
+    @staticmethod
+    def mount_for(mac: str) -> str:
+        return "lara_" + mac.replace(":", "").lower()[-6:]
+
+    def display_name(self, rec: dict, mac: str) -> str:
+        name = (rec.get("name") or "").strip()
+        if not name:
+            name = "LARA " + mac.replace(":", "").upper()[-6:]
+        if self.name_prefix and not name.lower().startswith("lara"):
+            name = f"LARA {name}"
+        return name
+
+    def build_zones(self):
+        """One zone per radio; plus a group zone when there is more than one radio.
+
+        With a single radio a group device would just be a second name for the same speaker,
+        so it is skipped — that is what the user sees in the Spotify app either way.
+        """
+        macs = list(self.radios.keys())
+        zones: list[Zone] = []
+        if not macs:
+            # Nothing answered. Keep one device alive so Spotify still has somewhere to play;
+            # it feeds whatever radio turns up on SlimProto later.
+            log.warning("no LARA found on the network — offering a single '%s' device that "
+                        "will drive any radio that connects later", self.fallback_name)
+            zones.append(Zone(FALLBACK_MOUNT, self.fallback_name, None))
+        else:
+            used: dict[str, str] = {}
+            for mac in macs:
+                name = self.display_name(self.radios[mac]["rec"], mac)
+                if name in used:   # two radios with the same name — disambiguate by MAC tail
+                    name = f"{name} {mac.replace(':', '').upper()[-4:]}"
+                used[name] = mac
+                zones.append(Zone(self.mount_for(mac), name, [mac]))
+            if len(macs) > 1:
+                zones.append(Zone(GROUP_MOUNT, self.group_name, None))
+        self.zones = zones
+        self.zone_names = {z.mount: z.name for z in zones}
+        for z in zones:
+            log.info("zone /%s  ->  Spotify device %r  (%s)", z.mount, z.name,
+                     "všechna rádia" if z.is_group else z.radios[0])
+
+    def zone_for(self, mac: str, active: set[str]) -> str | None:
+        """Which mount this radio should play. A radio's own device beats the group device."""
+        for z in self.zones:            # specific zones come first, group last
+            if z.mount in active and z.covers(mac):
+                return z.mount
+        return None
+
+    # --- audio pipelines -------------------------------------------------------
+    def render_liq(self, zone: Zone) -> str:
+        with open(LIQ_TEMPLATE, encoding="utf-8") as f:
+            tpl = f.read()
+        for key, val in (("PORT", self.port), ("SOURCE_PASSWORD", self.source_password),
+                         ("BITRATE", self.bitrate), ("SPOTIFY_BITRATE", self.spotify_bitrate),
+                         ("MOUNT", zone.mount), ("ZONE_NAME", zone.name)):
+            tpl = tpl.replace(f"%%{key}%%", str(val))
+        path = os.path.join(STATE_DIR, f"zone_{zone.mount}.liq")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(tpl)
+        return path
+
+    async def start_zone(self, zone: Zone):
+        os.makedirs(f"/data/librespot_{zone.mount}", exist_ok=True)
+        open(os.path.join(STATE_DIR, f"librespot_{zone.mount}.log"), "a").close()
+        path = self.render_liq(zone)
+        try:
+            self.procs[zone.mount] = await asyncio.create_subprocess_exec("liquidsoap", path)
+            log.info("zone /%s started (Spotify device %r)", zone.mount, zone.name)
+        except Exception:
+            log.exception("could not start Liquidsoap for zone /%s", zone.mount)
+
+    async def supervise_zones(self):
+        """Restart a pipeline whose Liquidsoap died — otherwise that device vanishes silently."""
+        for zone in self.zones:
+            proc = self.procs.get(zone.mount)
+            if proc is not None and proc.returncode is not None:
+                log.warning("Liquidsoap for zone /%s exited (%s) — restarting",
+                            zone.mount, proc.returncode)
+                self.procs.pop(zone.mount, None)
+                await self.start_zone(zone)
+
+    async def stop_zones(self):
+        for mount, proc in self.procs.items():
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+                log.info("zone /%s stopped", mount)
 
     # --- SlimProto / CLI callbacks ---------------------------------------------
     def on_slim_connect(self, player):
-        """A LARA dialled in. It is a radio we can drive even if UDP discovery missed it."""
-        self._add(player.mac, {"ip": player.ip, "name": player.name, "mac": player.mac,
-                               "fw": "?"}, "slimproto")
+        """A LARA dialled in. Drive it even if the start-up scan never saw it."""
+        if self._add(player.mac, {"ip": player.ip, "name": player.name, "mac": player.mac,
+                                  "fw": "?"}, "slimproto"):
+            log.info("  (it has no Connect device of its own — restart the add-on to give it "
+                     "one; for now it follows %r)",
+                     self.zones[-1].name if self.zones else "?")
         self._warned_offline.discard(player.mac)
         self.target.pop(player.mac, None)
-        if spotify_active() and self._loop:
-            self._loop.create_task(self.route(player.mac))
+        if self._loop:
+            self._loop.create_task(self.tick())
 
     def on_slim_disconnect(self, player):
         self.target.pop(player.mac, None)
@@ -152,35 +278,36 @@ class Controller:
             self.cli.notify(player, what)
 
     async def on_cli_command(self, mac: str, verb: str):
-        """The LARA pressed a button / LMS-style command arrived on :9595."""
+        """The LARA pressed a button / an LMS-style command arrived on :9595."""
         log.info("CLI command from %s: %s", mac, verb)
         if verb in ("play", "power_on"):
-            await self.route(mac)
+            active = {z.mount for z in self.zones if spotify_active(z.mount)}
+            mount = self.zone_for(mac, active) or self.zone_for(mac, {z.mount for z in self.zones})
+            if mount:
+                await self.route(mac, mount)
         elif verb in ("stop", "power_off"):
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
-    def desired_volume(self) -> int | None:
-        """Spotify's slider if it has ever been moved, else `zone_volume`. None = don't touch."""
-        vol = spotify_volume()
+    def desired_volume(self, mount: str) -> int | None:
+        """Spotify's slider if it ever reported one, else `zone_volume`. None = don't touch."""
+        vol = spotify_volume(mount)
         if vol is None:
             vol = self.volume
         return vol if vol > 0 else None
 
-    async def apply_volume(self, key: str):
-        vol = self.desired_volume()
+    async def apply_volume(self, key: str, mount: str):
+        vol = self.desired_volume(mount)
         if vol is None or self.applied_volume.get(key) == vol:
             return
         await self.slim.set_volume(key, vol)
         self.applied_volume[key] = vol
 
-    async def route(self, key: str):
-        """Put a LARA into the audio zone and start it on our mount."""
-        if self.target.get(key) == MOUNT:
+    async def route(self, key: str, mount: str):
+        """Put a LARA into the audio zone and start it on the given mount."""
+        if self.target.get(key) == mount or not self.slim:
             return
-        if not self.slim:
-            return
-        ok = await self.slim.push_stream(key, MOUNT)
+        ok = await self.slim.push_stream(key, mount)
         if not ok:
             if key not in self._warned_offline:
                 self._warned_offline.add(key)
@@ -188,12 +315,12 @@ class Controller:
                          "'Audio zone function' is enabled and points at %s", key, self.our_ip)
             return
         self.applied_volume.pop(key, None)
-        await self.apply_volume(key)
+        await self.apply_volume(key, mount)
         self.idle_since.pop(key, None)
-        self.target[key] = MOUNT
+        self.target[key] = mount
         rec = self.radios.get(key, {}).get("rec", {})
-        log.info("zone ON  %s (%s) -> %s", rec.get("name", key), rec.get("ip", "?"),
-                 self.slim.stream_url(MOUNT))
+        log.info("zone ON  %s (%s) -> /%s [%s]", rec.get("name", key), rec.get("ip", "?"),
+                 mount, self.zone_names.get(mount, mount))
 
     async def zone_off(self, key: str):
         """Spotify is done — stop the stream and put the LARA back on its radio list.
@@ -220,13 +347,14 @@ class Controller:
         log.info("zone OFF %s (%s)", rec.get("name", key), rec.get("ip", "?"))
 
     async def tick(self):
-        active = spotify_active()
+        active = {z.mount for z in self.zones if spotify_active(z.mount)}
         now = time.monotonic()
         for key in list(self.radios.keys()):
-            if active:
-                await self.route(key)
-                if self.target.get(key):
-                    await self.apply_volume(key)   # follow the Spotify slider while playing
+            mount = self.zone_for(key, active)
+            if mount:
+                await self.route(key, mount)
+                if self.target.get(key) == mount:
+                    await self.apply_volume(key, mount)
             elif self.target.get(key):
                 started = self.idle_since.setdefault(key, now)
                 if now - started >= self.idle_timeout:
@@ -235,12 +363,27 @@ class Controller:
     # --- main loop -------------------------------------------------------------
     async def run(self):
         self._loop = asyncio.get_running_loop()
-        log.info("controller mode=%s our_ip=%s mount=/%s idle_timeout=%ds "
-                 "buffer=%.1fs (%d KB @ %d kbps)", self.mode, self.our_ip, MOUNT,
-                 self.idle_timeout, self.buffer_seconds, self.buffer_kb, self.bitrate)
+        stopping = asyncio.Event()
+        for sig in ("SIGTERM", "SIGINT"):
+            # run.sh sends SIGTERM on add-on shutdown; without this the process dies before
+            # `finally` runs and the Liquidsoap children are orphaned.
+            try:
+                self._loop.add_signal_handler(getattr(signal, sig), stopping.set)
+            except (AttributeError, NotImplementedError, RuntimeError):
+                pass
+        log.info("controller mode=%s our_ip=%s idle_timeout=%ds buffer=%.1fs (%d KB @ %d kbps)",
+                 self.mode, self.our_ip, self.idle_timeout, self.buffer_seconds,
+                 self.buffer_kb, self.bitrate)
+        try:
+            await asyncio.to_thread(self.discover)
+        except Exception:
+            log.exception("discovery failed")
+        self.build_zones()
+        for zone in self.zones:
+            await self.start_zone(zone)
+
         if self.mode == "off":
-            log.info("control_mode=off — inventory only, no switching. Set control_mode to "
-                     "'slimproto' to actually drive the radios.")
+            log.info("control_mode=off — streams only, radios are never switched.")
         if self.mode == "slimproto":
             self.slim = SlimProtoServer(self.our_ip, self.port, buffer_kb=self.buffer_kb,
                                         on_connect=self.on_slim_connect,
@@ -248,23 +391,24 @@ class Controller:
                                         on_state=self.on_slim_state)
             await self.slim.start()
             self.cli = LmsCliServer(self.slim, port=self.cli_port, username=self.cli_user,
-                                    password=self.cli_pass, zone_name=self.zone_name,
-                                    mount=MOUNT, on_command=self.on_cli_command)
+                                    password=self.cli_pass, zone_names=self.zone_names,
+                                    fallback_name=self.group_name,
+                                    on_command=self.on_cli_command)
             await self.cli.start()
-        last_discover = 0.0
-        while True:
-            if time.monotonic() - last_discover > 60:
+        try:
+            while not stopping.is_set():
+                await self.supervise_zones()
+                if self.mode == "slimproto":
+                    try:
+                        await self.tick()
+                    except Exception:
+                        log.exception("route tick failed")
                 try:
-                    await asyncio.to_thread(self.discover)
-                except Exception:
-                    log.exception("discovery failed")
-                last_discover = time.monotonic()
-            if self.mode == "slimproto":
-                try:
-                    await self.tick()
-                except Exception:
-                    log.exception("route tick failed")
-            await asyncio.sleep(1.0)
+                    await asyncio.wait_for(stopping.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            await self.stop_zones()
 
 
 def main():

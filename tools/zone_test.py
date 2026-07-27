@@ -98,7 +98,8 @@ async def main() -> int:
     if args.proxy:
         await start_proxy(args.port, args.proxy)
     slim = SlimProtoServer(args.our_ip, args.port)
-    cli = LmsCliServer(slim, port=args.cli_port, zone_name="Audio zóna", mount=args.mount)
+    cli = LmsCliServer(slim, port=args.cli_port, zone_names={args.mount: "Audio zóna"},
+                       fallback_name="Audio zóna")
     slim.on_state = lambda player, what: cli.notify(player, what)
 
     def on_connect(player):
