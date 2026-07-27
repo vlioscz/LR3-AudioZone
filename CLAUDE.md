@@ -58,7 +58,7 @@ lr3_audiozone/
     lmscli.py        LMS CLI server :9595 — the LARA's control/display channel
     discovery.py     UDP-broadcast discovery
     elkoproto.py     ELKO 61695 protocol (obfuscation, builders, parsers)
-    laradev.py       one LARA over 61695 (used only for `lara_off_action: slim_elko`)
+    laradev.py       one LARA over 61695 — `park_on_radio()` on zone-off
 ```
 
 ## How routing works
@@ -71,11 +71,14 @@ saw it** (`on_slim_connect`), so the add-on works on networks that eat broadcast
 
 - Spotify active → `slim.push_stream(mac, "default")`: `aude 1 1` (power on) + `strm-s` to
   `http://<our_ip>:<port>/default` + `audg`.
-- Spotify idle for `idle_timeout` s → `zone_off()`: `strm-q` + `aude 0 0`, then (default
-  `lara_off_action: radio`) `select_source(RADIO)` + `stop` over 61695. Dropping the stream
-  alone leaves the unit **lit and showing a dead audio zone** — parking it on the station list
-  is what a person walking up to the radio expects. Spotify is always started from the phone,
-  so nothing is lost by leaving the zone. `slim` = SlimProto only, `slim_elko` = + plain stop.
+- Spotify idle for `idle_timeout` s → `zone_off()`: `strm-q` + `aude 0 0`, then
+  `select_source(RADIO)` + `stop` over 61695 (`laradev.park_on_radio`). SlimProto alone only
+  **mutes** — the unit stays lit showing a dead audio zone, confirmed on hardware. Parking it
+  on the station list is what a person walking up to the radio expects, and Spotify is always
+  started from the phone, so nothing is lost by leaving the zone. This is the **only**
+  authenticated path we use (61695 needs `lara_username`/`lara_password`); everything else —
+  discovery, SlimProto, the CLI — is unauthenticated. There is deliberately no option to pick
+  a weaker behaviour: the alternatives all left the zone hanging on the display.
 
 **Volume.** librespot runs with `--volume-ctrl fixed`, so the Spotify slider never attenuates the
 stream — a second, invisible volume control is exactly how you get a zone nobody can un-mute.
@@ -168,15 +171,20 @@ and playback verified for 60 s; `strm-q` + `aude 0 0` stops the fetch and keeps 
 volume applied; the CLI handshake `stop` no longer causes a flap. `strm` alone is enough — no
 61695 SOURCE-select was needed.
 
+**Done on HA (0.2.1 / 0.2.2)** — the whole loop runs: Spotify plays → LARA plays (latency now
+~2 s after the buffer work); disconnect → noticed in ~5 s → after `idle_timeout` the LARA goes
+back to the station list, verified working. `aude 0 0` was confirmed to only **mute**, which is
+why the 61695 source switch is unconditional now.
+
 **Left**
-1. The loop end-to-end **through the add-on** on HA: Spotify play on the "Audio zóna" device →
-   controller pushes → audible; pause → off after `idle_timeout`; resume. (Only the controller's
-   state machine is untested on-device; its two ends are.)
-2. Confirm audibility + a sane `zone_volume`. The LARA reports its own knob over the CLI, and its
-   scale does not match ours 1:1 (we sent 30, it reported 50).
-3. Whether `aude 0 0` merely mutes or the unit visibly leaves the zone — if it only mutes, switch
-   `lara_off_action` to `slim_elko`.
-4. Multiple LARAs at once; mount-switch latency.
+1. **The Spotify volume slider is gone.** `--volume-ctrl fixed` removes the Connect device's
+   volume capability entirely, so this librespot never emits a volume event and
+   `spotify_volume()` / `/tmp/spotify_volume_default` never fire. Accepted as the lesser evil
+   (a slider that silently attenuates the stream is worse), but if the slider is wanted back
+   while the LARA keeps the real volume, it needs a librespot mixer that *reports* volume
+   without applying it — none of the stock ones do.
+2. `zone_volume` scale: we sent `audg` 30, the LARA reported 50 back over the CLI. Calibrate.
+3. Multiple LARAs at once; mount-switch latency.
 
 ## Build / dev conventions
 

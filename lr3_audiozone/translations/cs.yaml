@@ -37,8 +37,9 @@ configuration:
   idle_timeout:
     name: Prodleva vypnutí (s)
     description: >-
-      Kolik sekund musí být Spotify v klidu (pauza/stop), než se LARA vypne a
-      opustí audio zónu. Krátká pauza nebo přechod mezi skladbami ji tedy nevypne.
+      Kolik sekund musí být Spotify v klidu (pauza/stop), než LARA opustí audio zónu a vrátí
+      se na seznam rádií. Tohle je ta prodleva, po kterou zóna po zastavení hudby ještě visí
+      na displeji. Přechod mezi skladbami ji nevypne — ten se jako pauza nepočítá.
   control_mode:
     name: Ovládání LARA
     description: >-
@@ -59,20 +60,14 @@ configuration:
     name: LMS CLI — heslo
     description: >-
       Heslo, kterým se LARA hlásí na CLI. Nech prázdné, pokud v LAŘE žádné není.
-  lara_off_action:
-    name: Co udělat při vypnutí zóny
-    description: >-
-      radio = zastavit stream a vrátit LARU na seznam rádií, ale nezapnutou — připravenou,
-      kdyby k ní někdo přišel (výchozí; vyžaduje správné LARA jméno/heslo, jede přes port 61695).
-      slim = jen zastavit stream a ztlumit výstupy přes SlimProto; LARA ale zůstane svítit
-      s prázdnou audio zónou. slim_elko = jako slim + stop přes ELKO protokol.
-      none = nedělat nic, LARA zůstane v audio zóně.
   lara_username:
     name: LARA — uživatel
-    description: Přihlašovací jméno k LARA rádiím (výchozí „admin").
+    description: >-
+      Přihlašovací jméno k LARA rádiím (výchozí „admin"). Potřebné pro návrat na seznam rádií
+      po skončení Spotify — ten jde po portu 61695, který ověřování vyžaduje.
   lara_password:
     name: LARA — heslo
-    description: Heslo k LARA rádiím (výchozí „elkoep").
+    description: Heslo k LARA rádiím (výchozí „elkoep"). Viz uživatel výše.
   lara_hosts:
     name: LARA — ruční IP
     description: >-

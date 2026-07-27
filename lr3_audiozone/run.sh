@@ -17,7 +17,7 @@ BITRATE=$(jq -r '.bitrate // 192' "$OPTIONS")
 SPOTIFY_BITRATE=$(jq -r '.spotify_bitrate // 320' "$OPTIONS")
 ZONE_NAME=$(jq -r '.zone_name // "Audio zóna"' "$OPTIONS")
 CMODE=$(jq -r '.control_mode // "slimproto"' "$OPTIONS")
-IDLE_TIMEOUT=$(jq -r '.idle_timeout // 20' "$OPTIONS")
+IDLE_TIMEOUT=$(jq -r '.idle_timeout // 8' "$OPTIONS")
 CLI_PORT=$(jq -r '.cli_port // 9595' "$OPTIONS")
 
 # Zjisti LAN IP hostitele (host_network: true → kontejner ji sdílí).
@@ -27,7 +27,7 @@ ICE_HOSTNAME="$HA_IP"
 [ "$ICE_HOSTNAME" = "<HA_IP>" ] && ICE_HOSTNAME="localhost"
 
 log "Startuji LR3 AudioZone (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
-log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti se LARA vypne"
+log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti zpět na rádia"
 
 # --- D-Bus + Avahi (librespot z raspotify používá avahi zeroconf backend) ---
 log "Spouštím D-Bus + Avahi (pro Spotify Connect discovery)..."
@@ -111,7 +111,7 @@ echo "  Icecast mount:     http://${HA_IP}:${PORT}/${MOUNT}"
 echo "  Režim ovládání:    ${CMODE}   (SlimProto :3483 + LMS CLI :${CLI_PORT})"
 echo "  V LAŘE nastav:     Audio zone function = ZAP, slim server IP = ${HA_IP}, CLI port = ${CLI_PORT}"
 echo "  → Pusť Spotify do '${ZONE_NAME}' a nalezená LARA rádia se přepnou na audio zónu."
-echo "  → Po ${IDLE_TIMEOUT}s bez Spotify se LARA zase vypnou."
+echo "  → Po ${IDLE_TIMEOUT}s bez Spotify se vrátí na seznam rádií (zastavené)."
 echo "=================================================================="
 
 # --- SlimProto controller (discovery + push na LARA při Spotify-active) ---

@@ -5,9 +5,9 @@ There is no fallback radio any more. The Icecast mount carries Spotify (and sile
 Spotify is idle, so the mount never dies), and the LARA is only *in* the audio zone while
 Spotify is actually playing:
 
-    Spotify active  ->  strm-s  (+ aude on)   -> LARA switches to "Audio zóna" and plays
-    Spotify idle    ->  strm-q  (+ aude off)  -> LARA goes dark after `idle_timeout`
-                        (+ optional ELKO 61695 stop, see `lara_off_action`)
+    Spotify active  ->  strm-s (+ aude on)                 -> LARA plays the audio zone
+    Spotify idle    ->  strm-q (+ aude off) + RADIO/stop   -> after `idle_timeout` the LARA
+                        goes back to its station list, prepared but not playing
 
 Two server sockets drive the LARA:
   * :3483  SlimProto — audio transport + power/volume  (`slimproto.py`)
@@ -92,8 +92,7 @@ class Controller:
         self.hosts = opt(cfg, "lara_hosts", [])
         self.port = opt(cfg, "port", 8121)
         self.zone_name = opt(cfg, "zone_name", "Audio zóna")
-        self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 20)))
-        self.off_action = opt(cfg, "lara_off_action", "radio")
+        self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 8)))
         self.volume = int(opt(cfg, "zone_volume", 90))
         # How much audio the LARA buffers before it starts = the dominant latency in the
         # chain. Expressed in seconds and converted to the KB the strm packet wants, so the
@@ -197,31 +196,24 @@ class Controller:
                  self.slim.stream_url(MOUNT))
 
     async def zone_off(self, key: str):
-        """Spotify is done — stop the stream and take the LARA back out of the zone.
+        """Spotify is done — stop the stream and put the LARA back on its radio list.
 
-        Dropping the SlimProto stream is not enough on its own: the LARA stays lit and keeps
-        showing the (now dead) audio zone. `radio` therefore also sends it back to the station
-        list over 61695, stopped — Spotify is always started from the phone, so nothing is lost
-        by leaving the zone, and whoever walks up to the unit finds it where they expect.
+        SlimProto alone cannot finish the job: `strm-q` + `aude 0 0` only silences the unit,
+        which stays lit showing a dead audio zone. So we follow it with a source switch over
+        61695 (`select_source(RADIO)` + `stop`), leaving the radio prepared but not playing.
+        Spotify is always started from the phone, so there is no reason to keep the zone warm.
         """
-        if self.off_action == "none":
-            self.target[key] = None
-            self.idle_since.pop(key, None)
-            return
         if self.slim:
             await self.slim.stop(key)
             await self.slim.set_power(key, False)
-        if self.off_action in ("slim_elko", "radio"):
-            dev = self.radios.get(key, {}).get("dev")
-            if dev:
-                action = dev.park_on_radio if self.off_action == "radio" else dev.stop
-                try:
-                    if not await asyncio.to_thread(action):
-                        log.warning("ELKO %s did not take on %s — check lara_username/"
-                                    "lara_password (port 61695 needs them)",
-                                    self.off_action, key)
-                except Exception:
-                    log.exception("ELKO %s failed for %s", self.off_action, key)
+        dev = self.radios.get(key, {}).get("dev")
+        if dev:
+            try:
+                if not await asyncio.to_thread(dev.park_on_radio):
+                    log.warning("LARA %s did not take the switch back to radio — check "
+                                "lara_username/lara_password (port 61695 needs them)", key)
+            except Exception:
+                log.exception("switch back to radio failed for %s", key)
         self.target[key] = None
         self.idle_since.pop(key, None)
         rec = self.radios.get(key, {}).get("rec", {})
@@ -243,10 +235,9 @@ class Controller:
     # --- main loop -------------------------------------------------------------
     async def run(self):
         self._loop = asyncio.get_running_loop()
-        log.info("controller mode=%s our_ip=%s mount=/%s idle_timeout=%ds off=%s "
+        log.info("controller mode=%s our_ip=%s mount=/%s idle_timeout=%ds "
                  "buffer=%.1fs (%d KB @ %d kbps)", self.mode, self.our_ip, MOUNT,
-                 self.idle_timeout, self.off_action, self.buffer_seconds, self.buffer_kb,
-                 self.bitrate)
+                 self.idle_timeout, self.buffer_seconds, self.buffer_kb, self.bitrate)
         if self.mode == "off":
             log.info("control_mode=off — inventory only, no switching. Set control_mode to "
                      "'slimproto' to actually drive the radios.")

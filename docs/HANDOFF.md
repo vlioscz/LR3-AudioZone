@@ -28,7 +28,7 @@ LARA always has something to play); with the Slim path working we drive the LARA
 - `controller.py` — single mount, idle→off state machine (`idle_timeout`), radios learned from
   SlimProto connections as well as UDP discovery, LARA button presses routed back from the CLI.
 - options: `fallback_*` removed; added `idle_timeout`, `zone_volume`, `cli_port`, `cli_username`,
-  `cli_password`, `lara_off_action`.
+  `cli_password`. (0.2.2 also dropped `lara_off_action` again — see below.)
 
 ⚠️ Supervisor keeps previously saved options. If the add-on refuses to start after the update
 because of the removed `fallback_*` keys, open its Configuration tab and save it again.
@@ -64,26 +64,37 @@ controller state machine handles on/idle/off/resume plus SlimProto-only discover
 
 **Ran on HA, 0.2.1 fixes what it found**
 - The whole loop works: Spotify → LARA plays; disconnect → it notices in ~5 s and stops.
-- **`aude 0 0` only mutes.** The unit stayed lit with a dead audio zone on the display for ~10 s
-  after. Hence the new default `lara_off_action: radio` — after `strm-q` we send
-  `select_source(RADIO)` + `stop` over 61695 so it lands on the station list, prepared but not
-  playing. (Needs `lara_username`/`lara_password`; 61695 is the only authenticated path we use.)
+- **`aude 0 0` only mutes.** The unit stayed lit with a dead audio zone on the display. So after
+  `strm-q` we now always send `select_source(RADIO)` + `stop` over 61695 — it lands on the
+  station list, prepared but not playing. Confirmed working on the device. (Needs
+  `lara_username`/`lara_password`; 61695 is the only authenticated path we use.) **0.2.2 removed
+  the `lara_off_action` option** — every other value left the zone hanging on the display, so
+  the choice was complexity without a use case.
+- **`idle_timeout` is the zone-hangs-on-the-display delay.** It was 20 s and read as a bug
+  ("is some fallback timer still in there?"); it is not, there are no fallback remnants. Default
+  is now 8 s. A track change is not a pause (librespot reports `track_changed`/`playing`), so
+  this only guards a genuine pause.
 - **~4.5 s of lag.** Fixed: Icecast burst 16 KB → 0, Liquidsoap buffer 1.0 → 0.4 s, and the LARA
   `threshold` is now `buffer_seconds` × bitrate (1.5 s ≈ 36 KB @192 kbps) instead of a fixed
   64 KB (2.7 s). Expect ~2 s total.
 - **The Spotify slider was a hidden second volume control** — it attenuated the stream while the
   LARA sat at its own level. Now `--volume-ctrl fixed` + the slider is forwarded as `audg`.
 
+**Answered on HA:** the loop works end to end, latency is acceptable after the buffer work, and
+the switch back to the radio list works.
+
 **Left**
-1. Verify on HA that 0.2.1 actually lands: lag ~2 s without dropouts, the LARA returns to the
-   radio list, and the Spotify slider moves the LARA's volume.
-2. **Does this librespot build emit a volume event at all** with `--volume-ctrl fixed`? The hook
-   matches `*volume*` (the name differs between versions: `volume_set` / `volume_changed`) and
-   writes `/tmp/spotify_volume_default`. If that file never appears, the slider is simply inert —
-   still safe, but the mapping does nothing and needs another route.
-3. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
-   not ours. Calibrate by ear.
-4. **Multiple LARAs** at once; mount-switch latency.
+1. **The Spotify volume slider disappeared.** `--volume-ctrl fixed` removes the Connect device's
+   volume capability outright, so this librespot emits no volume event at all and
+   `/tmp/spotify_volume_default` is never written — `spotify_volume()` in `controller.py` is
+   dead code on this build (harmless, and it self-heals if a future librespot reports volume).
+   Judged the lesser evil: a slider that silently attenuates the stream while the LARA sits at
+   its own level is worse than no slider. Getting the slider back *and* keeping the LARA in
+   charge would need a mixer that reports volume without applying it; no stock librespot mixer
+   does that.
+2. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
+   not ours. Calibrate `zone_volume` by ear.
+3. **Multiple LARAs** at once; mount-switch latency.
 
 Testing without deploying the add-on:
 ```

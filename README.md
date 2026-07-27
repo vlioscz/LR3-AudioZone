@@ -30,8 +30,8 @@ Spotify Connect (librespot) ──► Liquidsoap ──► Icecast /default ─�
    Posuvník hlasitosti v aplikaci Spotify přitom **ovládá přímo hlasitost LARY** — stream samotný
    se neztlumuje, takže nevznikne skrytý druhý regulátor, kterým by šlo omylem „vypnout zvuk".
 5. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q`, ztlumí výstupy a
-   **vrátí LARU na seznam rádií — zastavenou**, aby zóna nezůstala viset na displeji a rádio
-   bylo připravené pro toho, kdo k němu přijde. Chování řídí `lara_off_action`.
+   přes port 61695 **vrátí LARU na seznam rádií — zastavenou**, aby zóna nezůstala viset na
+   displeji a rádio bylo připravené pro toho, kdo k němu přijde.
 
 ## Předpoklad: nasměruj LARA na HA jako slim server
 
@@ -51,12 +51,11 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `zone_name` | `Audio zóna` | Název Spotify Connect zařízení = název audio zóny. |
 | `zone_volume` | `90` | Výchozí hlasitost zóny, dokud nepohneš posuvníkem ve Spotify. `0` = hlasitost LARY neměnit. |
 | `buffer_seconds` | `1.5` | Kolik sekund si LARA načte, než začne hrát = hlavní zdroj zpoždění. Níž = svižnější, ale hrozí výpadky. |
-| `idle_timeout` | `20` | Sekundy nečinnosti Spotify, než se LARA vypne. |
+| `idle_timeout` | `8` | Sekundy nečinnosti Spotify, než LARA opustí zónu = jak dlouho zóna po zastavení hudby ještě visí na displeji. |
 | `control_mode` | `slimproto` | `slimproto` = řídit LARA. `off` = jen najít a logovat (test). |
 | `cli_port` | `9595` | Port LMS CLI — musí sedět s „CLI port" v konfiguraci LARY. |
 | `cli_username` / `cli_password` | prázdné | Přihlášení, které LARA na CLI posílá (pokud nějaké má). |
-| `lara_off_action` | `radio` | `radio` = vrátit LARU na seznam rádií, nezapnutou. `slim` = jen zastavit stream (LARA zůstane svítit v prázdné zóně). `slim_elko` = slim + stop přes 61695. `none` = nechat být. |
-| `lara_username` | `admin` | Uživatel LARA (potřeba pro `radio` / `slim_elko`). |
+| `lara_username` | `admin` | Uživatel LARA — nutný pro návrat na seznam rádií (port 61695). |
 | `lara_password` | `elkoep` | Heslo LARA. |
 | `lara_hosts` | `[]` | Ruční IP LARA, když je broadcast nenajde. |
 

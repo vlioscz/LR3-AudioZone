@@ -1,6 +1,6 @@
 name: LR3 AudioZone
 slug: lr3_audiozone
-version: "0.2.1"
+version: "0.2.2"
 description: Spotify Connect → automatické přehrání na ELKO EP „LARA" přes Slim server (SlimProto + LMS CLI)
 url: https://github.com/vlioscz/LR3-AudioZone
 arch:
@@ -19,12 +19,11 @@ options:
   zone_name: "Audio zóna"
   zone_volume: 90
   buffer_seconds: 1.5
-  idle_timeout: 20
+  idle_timeout: 8
   control_mode: "slimproto"
   cli_port: 9595
   cli_username: ""
   cli_password: ""
-  lara_off_action: "radio"
   lara_username: "admin"
   lara_password: "elkoep"
   lara_hosts: []
@@ -42,7 +41,6 @@ schema:
   cli_port: int
   cli_username: str?
   cli_password: password?
-  lara_off_action: list(radio|slim|slim_elko|none)
   lara_username: str
   lara_password: password
   lara_hosts:

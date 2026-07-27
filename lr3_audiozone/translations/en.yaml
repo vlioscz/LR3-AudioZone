@@ -38,9 +38,9 @@ configuration:
   idle_timeout:
     name: Power-off delay (s)
     description: >-
-      How many seconds Spotify has to stay idle (paused/stopped) before the LARA is
-      powered off and leaves the audio zone. Short pauses and track changes do not
-      switch it off.
+      How many seconds Spotify has to stay idle (paused/stopped) before the LARA leaves the
+      audio zone and returns to its station list. This is the delay for which the zone stays
+      on the display after the music stops. Track changes do not count as a pause.
   control_mode:
     name: LARA control
     description: >-
@@ -59,20 +59,14 @@ configuration:
   cli_password:
     name: LMS CLI password
     description: Password the LARA logs in with on the CLI. Leave empty if the LARA has none.
-  lara_off_action:
-    name: Zone power-off action
-    description: >-
-      radio = stop the stream and send the LARA back to its station list, stopped - ready for
-      whoever walks up to it (default; needs the correct LARA username/password, it goes over
-      port 61695). slim = only stop the stream and mute the outputs over SlimProto, which
-      leaves the unit lit showing an empty audio zone. slim_elko = slim plus an ELKO stop.
-      none = do nothing, leave the LARA sitting in the audio zone.
   lara_username:
     name: LARA username
-    description: Login name for the LARA radios (default "admin").
+    description: >-
+      Login name for the LARA radios (default "admin"). Needed for the switch back to the
+      station list when Spotify stops - that goes over port 61695, which requires auth.
   lara_password:
     name: LARA password
-    description: Password for the LARA radios (default "elkoep").
+    description: Password for the LARA radios (default "elkoep"). See the username above.
   lara_hosts:
     name: LARA manual IPs
     description: >-
