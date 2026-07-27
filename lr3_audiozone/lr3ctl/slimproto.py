@@ -93,10 +93,14 @@ class Player:
 
 
 class SlimProtoServer:
-    def __init__(self, our_ip: str, icecast_port: int = 8121,
+    def __init__(self, our_ip: str, icecast_port: int = 8121, buffer_kb: int = 36,
                  on_connect=None, on_disconnect=None, on_state=None):
         self.our_ip = our_ip
         self.icecast_port = icecast_port
+        # KB the player buffers before it starts. This IS the dominant latency in the chain,
+        # so it is derived from the bitrate (see Controller) rather than fixed. Must stay well
+        # under the 131072 B input buffer the LARA reports.
+        self.buffer_kb = max(8, min(120, int(buffer_kb)))
         self.players: dict[str, Player] = {}
         self.on_connect = on_connect        # callback(Player)
         self.on_disconnect = on_disconnect  # callback(Player)
@@ -227,8 +231,9 @@ class SlimProtoServer:
         * ``autostart='1'`` (buffer, then start) rather than '3' — this firmware does not
           take the "direct streaming" variants.
         * ``threshold`` in KB must fit the player's input buffer, which it reports as
-          131072 B. The old 200 KB was unreachable; 64 KB is ~2.7 s at 192 kbps, enough
-          to ride out jitter (20 KB underran within seconds).
+          131072 B — 200 KB was simply unreachable. It is also the biggest single source
+          of latency, so it comes from ``buffer_kb`` (the controller derives it from the
+          bitrate). 20 KB underran within seconds; ~1.5 s of audio is the working floor.
         """
         p = self.players.get(mac)
         if not p:
@@ -241,7 +246,7 @@ class SlimProtoServer:
             "Connection: close\r\nAccept: */*\r\n\r\n"
         ).encode()
         body = _strm_body(
-            b"s", autostart=b"1", threshold=64, output_threshold=10,
+            b"s", autostart=b"1", threshold=self.buffer_kb, output_threshold=10,
             server_port=self.icecast_port, server_ip=0,
             http=http,
         )

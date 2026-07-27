@@ -70,9 +70,25 @@ lr3_audiozone/
 saw it** (`on_slim_connect`), so the add-on works on networks that eat broadcasts.
 
 - Spotify active → `slim.push_stream(mac, "default")`: `aude 1 1` (power on) + `strm-s` to
-  `http://<our_ip>:<port>/default` + `audg` (zone_volume).
-- Spotify idle for `idle_timeout` s → `zone_off()`: `strm-q` + `aude 0 0`, and for
-  `lara_off_action: slim_elko` also a `CMD_STOP` over 61695.
+  `http://<our_ip>:<port>/default` + `audg`.
+- Spotify idle for `idle_timeout` s → `zone_off()`: `strm-q` + `aude 0 0`, then (default
+  `lara_off_action: radio`) `select_source(RADIO)` + `stop` over 61695. Dropping the stream
+  alone leaves the unit **lit and showing a dead audio zone** — parking it on the station list
+  is what a person walking up to the radio expects. Spotify is always started from the phone,
+  so nothing is lost by leaving the zone. `slim` = SlimProto only, `slim_elko` = + plain stop.
+
+**Volume.** librespot runs with `--volume-ctrl fixed`, so the Spotify slider never attenuates the
+stream — a second, invisible volume control is exactly how you get a zone nobody can un-mute.
+The slider position instead arrives via `--onevent` in `/tmp/spotify_volume_default` and the
+controller sends it to the LARA as `audg`. `zone_volume` is only the value used until the slider
+is first moved (`0` = never touch the LARA's volume). ⚠️ The event hook must NOT write volume
+events into `spotify_state_*`: everything outside `ACTIVE_EVENTS` reads as "not playing", so a
+volume nudge mid-song would switch the zone off.
+
+**Latency** is a stack of buffers; keep them in mind before adding another:
+Liquidsoap `input.external` (0.4 s) → mp3 encode → Icecast burst (**0**, `burst-on-connect 0`) →
+the LARA's own `threshold` (`buffer_seconds` × bitrate, default 1.5 s). That last one dominates —
+it was a fixed 64 KB (2.7 s at 192 kbps) and total lag ran ~4.5 s.
 - The LARA's own buttons arrive over the LMS CLI (`play`/`stop`/`power`/`button`) and are routed
   back into the same two actions via `Controller.on_cli_command`.
 

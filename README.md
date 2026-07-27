@@ -27,8 +27,11 @@ Spotify Connect (librespot) ──► Liquidsoap ──► Icecast /default ─�
    - **LMS CLI** na TCP `:9595` — textový kanál, kterým se LARA ptá, co hraje, a kterým
      posílá stisky svých vlastních tlačítek zpět nám.
 4. Když se Spotify rozehraje, addon pošle LAŘE `strm-s` → **LARA se přepne do audio zóny** a hraje.
-5. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q` + ztlumí výstupy →
-   **LARA zhasne** a zónu opustí. (Volitelně navíc stop přes ELKO protokol — `lara_off_action`.)
+   Posuvník hlasitosti v aplikaci Spotify přitom **ovládá přímo hlasitost LARY** — stream samotný
+   se neztlumuje, takže nevznikne skrytý druhý regulátor, kterým by šlo omylem „vypnout zvuk".
+5. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q`, ztlumí výstupy a
+   **vrátí LARU na seznam rádií — zastavenou**, aby zóna nezůstala viset na displeji a rádio
+   bylo připravené pro toho, kdo k němu přijde. Chování řídí `lara_off_action`.
 
 ## Předpoklad: nasměruj LARA na HA jako slim server
 
@@ -46,13 +49,14 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `bitrate` | `192` | Bitrate MP3 posílaného do LARA (kbps). |
 | `spotify_bitrate` | `320` | Kvalita Spotify (96/160/320). |
 | `zone_name` | `Audio zóna` | Název Spotify Connect zařízení = název audio zóny. |
-| `zone_volume` | `90` | Hlasitost, na kterou se LARA nastaví při zapnutí zóny (0–100). |
+| `zone_volume` | `90` | Výchozí hlasitost zóny, dokud nepohneš posuvníkem ve Spotify. `0` = hlasitost LARY neměnit. |
+| `buffer_seconds` | `1.5` | Kolik sekund si LARA načte, než začne hrát = hlavní zdroj zpoždění. Níž = svižnější, ale hrozí výpadky. |
 | `idle_timeout` | `20` | Sekundy nečinnosti Spotify, než se LARA vypne. |
 | `control_mode` | `slimproto` | `slimproto` = řídit LARA. `off` = jen najít a logovat (test). |
 | `cli_port` | `9595` | Port LMS CLI — musí sedět s „CLI port" v konfiguraci LARY. |
 | `cli_username` / `cli_password` | prázdné | Přihlášení, které LARA na CLI posílá (pokud nějaké má). |
-| `lara_off_action` | `slim` | `slim` = strm-q + ztlumit. `slim_elko` = navíc stop přes 61695. `none` = nechat běžet. |
-| `lara_username` | `admin` | Uživatel LARA (jen pro `slim_elko` / discovery). |
+| `lara_off_action` | `radio` | `radio` = vrátit LARU na seznam rádií, nezapnutou. `slim` = jen zastavit stream (LARA zůstane svítit v prázdné zóně). `slim_elko` = slim + stop přes 61695. `none` = nechat být. |
+| `lara_username` | `admin` | Uživatel LARA (potřeba pro `radio` / `slim_elko`). |
 | `lara_password` | `elkoep` | Heslo LARA. |
 | `lara_hosts` | `[]` | Ruční IP LARA, když je broadcast nenajde. |
 

@@ -23,10 +23,18 @@ configuration:
       The name the add-on shows in the Spotify app as a Connect device (= the
       audio-zone name). Play to it and the add-on pushes the audio to the LARA radios.
   zone_volume:
-    name: Zone volume (%)
+    name: Default zone volume (%)
     description: >-
-      Volume the LARA is set to when the audio zone switches on (0-100).
-      You can still change it on the LARA itself afterwards.
+      Volume the LARA is set to when the zone switches on, until you move the slider in the
+      Spotify app - from then on that slider drives the LARA's volume directly (the stream
+      itself is never attenuated, so there is no hidden second volume control).
+      0 = never touch the LARA's volume.
+  buffer_seconds:
+    name: Buffer lead (s)
+    description: >-
+      Seconds of audio the LARA loads before it starts playing. This is the main source of
+      delay between Spotify and the speaker - lower is snappier but a network hiccup can cause
+      dropouts. 1.5 s is a safe compromise; below 0.8 s tends to get risky.
   idle_timeout:
     name: Power-off delay (s)
     description: >-
@@ -54,8 +62,10 @@ configuration:
   lara_off_action:
     name: Zone power-off action
     description: >-
-      slim = stop the stream and mute the outputs over SlimProto (default).
-      slim_elko = additionally send a stop over the ELKO protocol on port 61695.
+      radio = stop the stream and send the LARA back to its station list, stopped - ready for
+      whoever walks up to it (default; needs the correct LARA username/password, it goes over
+      port 61695). slim = only stop the stream and mute the outputs over SlimProto, which
+      leaves the unit lit showing an empty audio zone. slim_elko = slim plus an ELKO stop.
       none = do nothing, leave the LARA sitting in the audio zone.
   lara_username:
     name: LARA username

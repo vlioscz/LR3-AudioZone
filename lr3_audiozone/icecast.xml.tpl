@@ -10,7 +10,12 @@
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
         <source-timeout>10</source-timeout>
-        <burst-size>16384</burst-size>
+        <!-- No burst: a burst is backlog, and backlog is latency. Icecast would hand the
+             LARA 16 KB (~0.7 s at 192 kbps) of already-encoded audio the moment it connects,
+             and that head start never gets paid back — it sits in the buffer for the whole
+             session. We stream live to one local player, so start at the live edge. -->
+        <burst-on-connect>0</burst-on-connect>
+        <burst-size>0</burst-size>
     </limits>
 
     <authentication>

@@ -70,7 +70,18 @@ fi
 mkdir -p /etc/lr3
 cat > /etc/lr3/spotify_event.sh <<'EOF'
 #!/usr/bin/env sh
-printf '%s' "${PLAYER_EVENT:-}" > "/tmp/spotify_state_${LR3_MOUNT:-unknown}"
+# POZOR: události hlasitosti se NESMÍ zapsat do stavového souboru. Controller bere všechno
+# mimo seznam přehrávacích událostí jako "Spotify nehraje" — a posunutí posuvníku uprostřed
+# skladby by tak LARU po idle_timeout vyplo.  Hlasitost jde do vlastního souboru.
+# Název události se mezi verzemi librespotu liší (volume_set / volume_changed), proto vzor.
+case "${PLAYER_EVENT:-}" in
+  *volume*)
+    [ -n "${VOLUME:-}" ] && printf '%s' "${VOLUME}" > "/tmp/spotify_volume_${LR3_MOUNT:-unknown}"
+    ;;
+  *)
+    printf '%s' "${PLAYER_EVENT:-}" > "/tmp/spotify_state_${LR3_MOUNT:-unknown}"
+    ;;
+esac
 EOF
 chmod +x /etc/lr3/spotify_event.sh
 

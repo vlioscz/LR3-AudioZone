@@ -62,14 +62,27 @@ Also proven offline (unit-level): `strm` body is 24 B + the embedded HTTP reques
 mode/elapsed, the CLI dispatch answers every implemented command on a single line, and the
 controller state machine handles on/idle/off/resume plus SlimProto-only discovery.
 
+**Ran on HA, 0.2.1 fixes what it found**
+- The whole loop works: Spotify → LARA plays; disconnect → it notices in ~5 s and stops.
+- **`aude 0 0` only mutes.** The unit stayed lit with a dead audio zone on the display for ~10 s
+  after. Hence the new default `lara_off_action: radio` — after `strm-q` we send
+  `select_source(RADIO)` + `stop` over 61695 so it lands on the station list, prepared but not
+  playing. (Needs `lara_username`/`lara_password`; 61695 is the only authenticated path we use.)
+- **~4.5 s of lag.** Fixed: Icecast burst 16 KB → 0, Liquidsoap buffer 1.0 → 0.4 s, and the LARA
+  `threshold` is now `buffer_seconds` × bitrate (1.5 s ≈ 36 KB @192 kbps) instead of a fixed
+  64 KB (2.7 s). Expect ~2 s total.
+- **The Spotify slider was a hidden second volume control** — it attenuated the stream while the
+  LARA sat at its own level. Now `--volume-ctrl fixed` + the slider is forwarded as `audg`.
+
 **Left**
-1. The add-on itself on HA (`control_mode: slimproto`): play Spotify to the "Audio zóna" device →
-   LARA plays; pause → after `idle_timeout` it powers off; resume → back instantly. Only the
-   controller's state machine is untested on hardware — both of its ends now are.
-2. **Audibility + volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its
-   scale is not ours. Pick a sane `zone_volume` (or 0 = leave the knob alone) by ear.
-3. Does `aude 0 0` make the unit *visibly* leave the zone, or only mute it? If only mute, try
-   `lara_off_action: slim_elko` (adds a 61695 stop).
+1. Verify on HA that 0.2.1 actually lands: lag ~2 s without dropouts, the LARA returns to the
+   radio list, and the Spotify slider moves the LARA's volume.
+2. **Does this librespot build emit a volume event at all** with `--volume-ctrl fixed`? The hook
+   matches `*volume*` (the name differs between versions: `volume_set` / `volume_changed`) and
+   writes `/tmp/spotify_volume_default`. If that file never appears, the slider is simply inert —
+   still safe, but the mapping does nothing and needs another route.
+3. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
+   not ours. Calibrate by ear.
 4. **Multiple LARAs** at once; mount-switch latency.
 
 Testing without deploying the add-on:

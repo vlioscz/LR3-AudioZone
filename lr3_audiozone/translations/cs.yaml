@@ -23,10 +23,17 @@ configuration:
       Jméno, pod kterým se addon objeví v aplikaci Spotify jako Connect zařízení
       (= název audio zóny). Pustíš do něj hudbu a addon ji přepošle do LARA rádií.
   zone_volume:
-    name: Hlasitost zóny (%)
+    name: Výchozí hlasitost zóny (%)
     description: >-
-      Hlasitost, na kterou se LARA nastaví při zapnutí audio zóny (0–100).
-      Hlasitost jde pak měnit i přímo na LAŘE.
+      Hlasitost, na kterou se LARA nastaví při zapnutí zóny, dokud v aplikaci Spotify
+      nepohneš posuvníkem — pak řídí hlasitost LARY přímo ten (stream samotný se neztlumuje,
+      takže nemůže vzniknout skrytý druhý regulátor). 0 = hlasitost LAŘE vůbec neměnit.
+  buffer_seconds:
+    name: Náskok bufferu (s)
+    description: >-
+      Kolik sekund zvuku si LARA načte, než začne hrát. Tohle je hlavní zdroj zpoždění
+      mezi Spotify a reproduktorem — nižší hodnota = svižnější reakce, ale při zakolísání
+      sítě může zvuk vypadávat. 1.5 s je bezpečný kompromis, pod 0.8 s to už bývá riskantní.
   idle_timeout:
     name: Prodleva vypnutí (s)
     description: >-
@@ -55,8 +62,10 @@ configuration:
   lara_off_action:
     name: Co udělat při vypnutí zóny
     description: >-
-      slim = zastavit stream a ztlumit výstupy přes SlimProto (výchozí).
-      slim_elko = navíc poslat LAŘE stop přes ELKO protokol na portu 61695.
+      radio = zastavit stream a vrátit LARU na seznam rádií, ale nezapnutou — připravenou,
+      kdyby k ní někdo přišel (výchozí; vyžaduje správné LARA jméno/heslo, jede přes port 61695).
+      slim = jen zastavit stream a ztlumit výstupy přes SlimProto; LARA ale zůstane svítit
+      s prázdnou audio zónou. slim_elko = jako slim + stop přes ELKO protokol.
       none = nedělat nic, LARA zůstane v audio zóně.
   lara_username:
     name: LARA — uživatel

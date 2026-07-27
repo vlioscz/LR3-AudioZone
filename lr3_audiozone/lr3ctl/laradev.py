@@ -6,6 +6,7 @@ close) — matching the reference library's transaction model.
 from __future__ import annotations
 
 import socket
+import time
 
 import elkoproto as ep
 
@@ -96,6 +97,19 @@ class LaraDevice:
             if nm.strip().lower() == target:
                 return i
         return None
+
+    def park_on_radio(self) -> bool:
+        """Leave the unit sitting on the radio list, ready but NOT playing.
+
+        Used when the audio zone switches off. Dropping the SlimProto stream alone leaves the
+        LARA lit and still showing the (now dead) zone; this puts it back where someone walking
+        up to it would expect to find it. `stop` after the source switch matters — selecting a
+        source can resume the last station, and we want it prepared, not playing.
+        """
+        if not self.select_source(ep.SOURCE_RADIO):
+            return False
+        time.sleep(0.3)
+        return self.stop()
 
     def play_preset(self, name: str) -> bool:
         """Switch to RADIO input and select the preset whose name matches (case-insensitive)."""

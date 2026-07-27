@@ -12,13 +12,19 @@ settings.init.allow_root.set(true)
 # librespot se přes avahi objeví na LAN jako Spotify zařízení "%%ZONE_NAME%%"
 # a posílá raw S16 PCM na stdout. Píše RYCHLEJI než realtime, takže bez omezení
 # se buffer plní až na 'max' a tam trvale stojí — to je zdroj latence i "dojezdu" při stopu.
-# max=1.5 → krátký ocas; rezervu proti jitteru drží vnitřní buffer librespotu, ne tenhle FIFO.
-# --onevent zapisuje play/stop stav do /tmp/spotify_state_<mount> (čte ho SlimProto controller).
+# Držíme ho krátký (0.4/0.8 s); rezervu proti jitteru drží vnitřní buffer librespotu
+# a práh v LAŘE (viz buffer_seconds), ne tenhle FIFO.
+#
+# --volume-ctrl fixed: posuvník hlasitosti ve Spotify NESMÍ škrtit samotný stream.
+# Jinak vznikne skrytý druhý regulátor — ztlumíš v mobilu, LARA je nahlas a nikdo neví proč
+# není nic slyšet. Stream tak jde vždy v plné úrovni a hlasitost řeší výhradně LARA
+# (controller jí posílá audg; hodnotu bere z posuvníku ve Spotify, viz spotify_event.sh).
+# --onevent zapisuje stav do /tmp/spotify_state_<mount> a hlasitost do /tmp/spotify_volume_<mount>.
 spotify = input.external.rawaudio(
   id="spotify_%%MOUNT%%",
   restart=true, restart_on_error=true,
-  buffer=1.0, max=1.5, log_overfull=false,
-  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --initial-volume 100 --cache /data/librespot_%%MOUNT%% --cache-size-limit 1G --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
+  buffer=0.4, max=0.8, log_overfull=false,
+  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --volume-ctrl fixed --initial-volume 100 --cache /data/librespot_%%MOUNT%% --cache-size-limit 1G --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
 )
 
 # --- Ticho, aby byl mount vždy krmený ---

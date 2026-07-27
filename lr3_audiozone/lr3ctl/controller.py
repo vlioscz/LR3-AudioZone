@@ -67,6 +67,22 @@ def spotify_active(mount: str = MOUNT) -> bool:
         return False
 
 
+def spotify_volume(mount: str = MOUNT) -> int | None:
+    """The Spotify app's volume slider, 0-100, or None if it has never been touched.
+
+    librespot is run with `--volume-ctrl fixed` so the slider does NOT attenuate the audio
+    (a hidden second volume control is how you end up with a silent zone nobody can explain).
+    Instead the position lands here and we send it to the LARA as `audg` — the slider then
+    controls the real thing. librespot reports 0-65535; older builds report 0-100.
+    """
+    try:
+        with open(os.path.join(STATE_DIR, f"spotify_volume_{mount}")) as f:
+            raw = int(float(f.read().strip()))
+    except (OSError, ValueError):
+        return None
+    return max(0, min(100, round(raw / 65535 * 100) if raw > 100 else raw))
+
+
 class Controller:
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -77,8 +93,14 @@ class Controller:
         self.port = opt(cfg, "port", 8121)
         self.zone_name = opt(cfg, "zone_name", "Audio zóna")
         self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 20)))
-        self.off_action = opt(cfg, "lara_off_action", "slim")
+        self.off_action = opt(cfg, "lara_off_action", "radio")
         self.volume = int(opt(cfg, "zone_volume", 90))
+        # How much audio the LARA buffers before it starts = the dominant latency in the
+        # chain. Expressed in seconds and converted to the KB the strm packet wants, so the
+        # delay stays the same whatever the bitrate is.
+        self.bitrate = max(32, int(opt(cfg, "bitrate", 192)))
+        self.buffer_seconds = max(0.2, float(opt(cfg, "buffer_seconds", 1.5)))
+        self.buffer_kb = max(8, int(self.bitrate / 8 * self.buffer_seconds))
         self.cli_port = int(opt(cfg, "cli_port", DEFAULT_CLI_PORT))
         self.cli_user = opt(cfg, "cli_username", "")
         self.cli_pass = opt(cfg, "cli_password", "")
@@ -86,6 +108,7 @@ class Controller:
         self.radios: dict[str, dict] = {}          # mac -> {rec, dev}
         self.target: dict[str, str | None] = {}    # mac -> mount currently pushed
         self.idle_since: dict[str, float] = {}     # mac -> when Spotify went idle
+        self.applied_volume: dict[str, int] = {}   # mac -> volume we last sent
         self.slim: SlimProtoServer | None = None
         self.cli: LmsCliServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -138,6 +161,20 @@ class Controller:
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
+    def desired_volume(self) -> int | None:
+        """Spotify's slider if it has ever been moved, else `zone_volume`. None = don't touch."""
+        vol = spotify_volume()
+        if vol is None:
+            vol = self.volume
+        return vol if vol > 0 else None
+
+    async def apply_volume(self, key: str):
+        vol = self.desired_volume()
+        if vol is None or self.applied_volume.get(key) == vol:
+            return
+        await self.slim.set_volume(key, vol)
+        self.applied_volume[key] = vol
+
     async def route(self, key: str):
         """Put a LARA into the audio zone and start it on our mount."""
         if self.target.get(key) == MOUNT:
@@ -151,7 +188,8 @@ class Controller:
                 log.info("LARA %s is not connected to SlimProto (:3483) yet — check that its "
                          "'Audio zone function' is enabled and points at %s", key, self.our_ip)
             return
-        await self.slim.set_volume(key, self.volume)
+        self.applied_volume.pop(key, None)
+        await self.apply_volume(key)
         self.idle_since.pop(key, None)
         self.target[key] = MOUNT
         rec = self.radios.get(key, {}).get("rec", {})
@@ -159,7 +197,13 @@ class Controller:
                  self.slim.stream_url(MOUNT))
 
     async def zone_off(self, key: str):
-        """Spotify is done — stop the stream and take the LARA back out of the zone."""
+        """Spotify is done — stop the stream and take the LARA back out of the zone.
+
+        Dropping the SlimProto stream is not enough on its own: the LARA stays lit and keeps
+        showing the (now dead) audio zone. `radio` therefore also sends it back to the station
+        list over 61695, stopped — Spotify is always started from the phone, so nothing is lost
+        by leaving the zone, and whoever walks up to the unit finds it where they expect.
+        """
         if self.off_action == "none":
             self.target[key] = None
             self.idle_since.pop(key, None)
@@ -167,13 +211,17 @@ class Controller:
         if self.slim:
             await self.slim.stop(key)
             await self.slim.set_power(key, False)
-        if self.off_action == "slim_elko":
+        if self.off_action in ("slim_elko", "radio"):
             dev = self.radios.get(key, {}).get("dev")
             if dev:
+                action = dev.park_on_radio if self.off_action == "radio" else dev.stop
                 try:
-                    await asyncio.to_thread(dev.stop)
+                    if not await asyncio.to_thread(action):
+                        log.warning("ELKO %s did not take on %s — check lara_username/"
+                                    "lara_password (port 61695 needs them)",
+                                    self.off_action, key)
                 except Exception:
-                    log.exception("ELKO stop failed for %s", key)
+                    log.exception("ELKO %s failed for %s", self.off_action, key)
         self.target[key] = None
         self.idle_since.pop(key, None)
         rec = self.radios.get(key, {}).get("rec", {})
@@ -185,6 +233,8 @@ class Controller:
         for key in list(self.radios.keys()):
             if active:
                 await self.route(key)
+                if self.target.get(key):
+                    await self.apply_volume(key)   # follow the Spotify slider while playing
             elif self.target.get(key):
                 started = self.idle_since.setdefault(key, now)
                 if now - started >= self.idle_timeout:
@@ -193,13 +243,15 @@ class Controller:
     # --- main loop -------------------------------------------------------------
     async def run(self):
         self._loop = asyncio.get_running_loop()
-        log.info("controller mode=%s our_ip=%s mount=/%s idle_timeout=%ds off=%s",
-                 self.mode, self.our_ip, MOUNT, self.idle_timeout, self.off_action)
+        log.info("controller mode=%s our_ip=%s mount=/%s idle_timeout=%ds off=%s "
+                 "buffer=%.1fs (%d KB @ %d kbps)", self.mode, self.our_ip, MOUNT,
+                 self.idle_timeout, self.off_action, self.buffer_seconds, self.buffer_kb,
+                 self.bitrate)
         if self.mode == "off":
             log.info("control_mode=off — inventory only, no switching. Set control_mode to "
                      "'slimproto' to actually drive the radios.")
         if self.mode == "slimproto":
-            self.slim = SlimProtoServer(self.our_ip, self.port,
+            self.slim = SlimProtoServer(self.our_ip, self.port, buffer_kb=self.buffer_kb,
                                         on_connect=self.on_slim_connect,
                                         on_disconnect=self.on_slim_disconnect,
                                         on_state=self.on_slim_state)
