@@ -88,6 +88,22 @@ def spotify_volume(mount: str) -> int | None:
     return max(0, min(100, round(raw / 65535 * 100) if raw > 100 else raw))
 
 
+def spotify_track(mount: str) -> tuple[str, str]:
+    """(title, artist) of what this zone is playing — written by the librespot event hook.
+
+    The LARA polls the LMS CLI for `current_title ?` and `artist ?` roughly every few seconds
+    while it plays, so putting real values here is all it takes to get the track on its display
+    instead of the zone name. Empty strings when librespot has not reported a track (yet).
+    """
+    try:
+        with open(os.path.join(STATE_DIR, f"spotify_track_{mount}"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return "", ""
+    return (lines[0].strip() if lines else "",
+            lines[1].strip() if len(lines) > 1 else "")
+
+
 class Zone:
     """One Spotify Connect device = one librespot + one Liquidsoap + one Icecast mount."""
 
@@ -346,6 +362,17 @@ class Controller:
         rec = self.radios.get(key, {}).get("rec", {})
         log.info("zone OFF %s (%s)", rec.get("name", key), rec.get("ip", "?"))
 
+    def update_now_playing(self, key: str, mount: str):
+        """Keep the LARA's display on the current track rather than the zone name."""
+        p = self.slim.players.get(key) if self.slim else None
+        if not p:
+            return
+        title, artist = spotify_track(mount)
+        if (p.title, p.artist) != (title, artist):
+            p.title, p.artist = title, artist
+            log.info("now playing on %s: %s — %s", key, title or "?", artist or "?")
+            self.on_slim_state(p, "play")
+
     async def tick(self):
         active = {z.mount for z in self.zones if spotify_active(z.mount)}
         now = time.monotonic()
@@ -355,6 +382,7 @@ class Controller:
                 await self.route(key, mount)
                 if self.target.get(key) == mount:
                     await self.apply_volume(key, mount)
+                    self.update_now_playing(key, mount)
             elif self.target.get(key):
                 started = self.idle_since.setdefault(key, now)
                 if now - started >= self.idle_timeout:

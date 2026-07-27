@@ -75,12 +75,22 @@ cat > /etc/lr3/spotify_event.sh <<'EOF'
 # mimo seznam přehrávacích událostí jako "Spotify nehraje" — a posunutí posuvníku uprostřed
 # skladby by tak LARU po idle_timeout vyplo.  Hlasitost jde do vlastního souboru.
 # Název události se mezi verzemi librespotu liší (volume_set / volume_changed), proto vzor.
+M="${LR3_MOUNT:-unknown}"
 case "${PLAYER_EVENT:-}" in
   *volume*)
-    [ -n "${VOLUME:-}" ] && printf '%s' "${VOLUME}" > "/tmp/spotify_volume_${LR3_MOUNT:-unknown}"
+    [ -n "${VOLUME:-}" ] && printf '%s' "${VOLUME}" > "/tmp/spotify_volume_${M}"
     ;;
   *)
-    printf '%s' "${PLAYER_EVENT:-}" > "/tmp/spotify_state_${LR3_MOUNT:-unknown}"
+    printf '%s' "${PLAYER_EVENT:-}" > "/tmp/spotify_state_${M}"
+    # Metadata skladby pro displej LARY (ptá se na ně po LMS CLI: artist ? / current_title ?).
+    # Názvy proměnných se mezi verzemi librespotu liší, proto několik variant.
+    TITLE="${NAME:-${TRACK_NAME:-${ITEM_NAME:-}}}"
+    ART="${ARTISTS:-${ARTIST:-${ALBUM_ARTISTS:-}}}"
+    if [ -n "${TITLE}" ]; then
+      # ARTISTS bývá víc řádků (jeden interpret na řádek) → slož do jednoho.
+      ART=$(printf '%s' "${ART}" | tr '\n' ',' | sed -e 's/,$//' -e 's/,/, /g')
+      printf '%s\n%s\n' "${TITLE}" "${ART}" > "/tmp/spotify_track_${M}"
+    fi
     ;;
 esac
 EOF

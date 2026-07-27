@@ -32,7 +32,8 @@ které hraje do všech naráz. Vybereš si v mobilu, kam pustit hudbu, a addon r
 4. Addon je zároveň **Slim server** — dvě služby:
    - **SlimProto** na TCP `:3483` — přenos zvuku, hlasitost, zapnutí/vypnutí výstupů.
    - **LMS CLI** na TCP `:9595` — textový kanál, kterým se LARA ptá, co hraje, a kterým
-     posílá stisky svých vlastních tlačítek zpět nám.
+     posílá stisky svých vlastních tlačítek zpět nám. Tudy jí posíláme i **název skladby
+     a interpreta**, takže na displeji běží hrající skladba, ne název zóny.
 5. Když se Spotify rozehraje, addon pošle dotčeným rádiům `strm-s` → **přepnou se do audio zóny**
    a hrají. Vlastní zařízení rádia má přednost před skupinovým: pustíš-li hudbu do „LARA Koupelna"
    uprostřed skupinového poslechu, koupelna se odpojí a ostatní hrají dál.

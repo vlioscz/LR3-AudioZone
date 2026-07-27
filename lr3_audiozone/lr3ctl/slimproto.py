@@ -81,7 +81,8 @@ class Player:
         self.mode = "stop"          # play | pause | stop  (from STAT events)
         self.elapsed = 0.0          # seconds into the stream
         self.volume = 90
-        self.title = ""
+        self.title = ""    # track name, as the LARA's display shows it
+        self.artist = ""
 
     @property
     def name(self) -> str:
@@ -264,6 +265,7 @@ class SlimProtoServer:
             p.current_mount = None
             p.mode = "stop"
             p.elapsed = 0.0
+            p.title = p.artist = ""   # the track is gone; don't leave it on the display
             self._notify(p, "stop")
 
     async def pause(self, mac: str, paused: bool = True):

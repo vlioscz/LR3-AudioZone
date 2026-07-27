@@ -101,6 +101,15 @@ Watch out when writing probe helpers: `socket.timeout` is a subclass of `OSError
 `except OSError` around the read loop throws away the reply that already arrived. That bug made
 the sweep return nothing while a hand-written one-shot probe worked.
 
+**0.3.1 — the LARA's display shows the track.** It polls `current_title ?` and `artist ?` every
+few seconds while playing; those two answers are its two display lines, and we were answering
+both with the zone name. The event hook now also writes `/tmp/spotify_track_<mount>` from
+librespot's `track_changed` (title on line 1, artists joined on line 2) and the controller
+copies it onto the Player. ⚠️ Unverified which env var names this librespot build actually
+exports — the hook tries `NAME`/`TRACK_NAME`/`ITEM_NAME` and `ARTISTS`/`ARTIST`/`ALBUM_ARTISTS`.
+If the display still shows the zone name, check whether `/tmp/spotify_track_*` exists in the
+container; if not, the variable is called something else and the hook needs one more name.
+
 Also note `run.sh` no longer starts Liquidsoap — the controller renders `radio.liq.tpl` per zone,
 spawns one Liquidsoap each, restarts any that die, and kills them on SIGTERM.
 

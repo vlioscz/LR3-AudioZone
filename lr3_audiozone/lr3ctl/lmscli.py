@@ -122,8 +122,20 @@ class LmsCliServer:
         return out
 
     def _zone(self, player) -> str:
-        """Name of the zone this player is currently on — what its display should show."""
+        """Name of the zone this player is currently on."""
         return self.zone_names.get(player.current_mount or "", self.fallback_name)
+
+    def _title(self, player) -> str:
+        """What the LARA should show as the track. Falls back to the zone name.
+
+        The controller fills `title`/`artist` from librespot's track_changed event; until a
+        track is reported (or if this librespot build does not report one) the zone name is
+        still better than a blank display.
+        """
+        return player.title or self._zone(player)
+
+    def _artist(self, player) -> str:
+        return player.artist or self._zone(player)
 
     def _players(self) -> list:
         return list(self.slim.players.values())
@@ -156,7 +168,6 @@ class LmsCliServer:
         ]
 
     def _status_fields(self, p) -> list[str]:
-        title = p.title or self._zone(p)
         return [
             f"player_name:{p.name}",
             "player_connected:1",
@@ -183,8 +194,8 @@ class LmsCliServer:
         return [
             "playlist index:0",
             "id:-1",
-            f"title:{p.title or self._zone(p)}",
-            f"artist:{self._zone(p)}",
+            f"title:{self._title(p)}",
+            f"artist:{self._artist(p)}",
             "album:Spotify Connect",
             f"url:{self.slim.stream_url(p.current_mount)}",
             "remote:1",
@@ -290,11 +301,15 @@ class LmsCliServer:
         if verb == "duration":
             return self._reply(tokens, 0)
 
-        if verb in ("artist", "album", "genre"):
+        # These two are what the LARA polls while playing — they are its display.
+        if verb == "artist":
+            return self._reply(tokens, self._artist(p) if p.current_mount else "")
+
+        if verb in ("album", "genre"):
             return self._reply(tokens, self._zone(p) if p.current_mount else "")
 
         if verb in ("title", "current_title"):
-            return self._reply(tokens, (p.title or self._zone(p)) if p.current_mount else "")
+            return self._reply(tokens, self._title(p) if p.current_mount else "")
 
         if verb == "path":
             return self._reply(tokens, self.slim.stream_url(p.current_mount) if p.current_mount else "")
@@ -376,7 +391,7 @@ class LmsCliServer:
             return
         lines: list[list[str]] = []
         if what in ("play", "connect"):
-            lines.append([player.mac, "playlist", "newsong", player.title or self._zone(player), "0"])
+            lines.append([player.mac, "playlist", "newsong", self._title(player), "0"])
         elif what == "stop":
             lines.append([player.mac, "playlist", "stop"])
         elif what == "power":
@@ -385,7 +400,7 @@ class LmsCliServer:
             lines.append([player.mac, "mixer", "volume", str(player.volume)])
         elif what == "mode":
             if player.mode == "play":
-                lines.append([player.mac, "playlist", "newsong", player.title or self._zone(player), "0"])
+                lines.append([player.mac, "playlist", "newsong", self._title(player), "0"])
             else:
                 lines.append([player.mac, "playlist",
                               "pause" if player.mode == "pause" else "stop"])

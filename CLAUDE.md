@@ -118,6 +118,14 @@ it was a fixed 64 KB (2.7 s at 192 kbps) and total lag ran ~4.5 s.
 - The LARA's own buttons arrive over the LMS CLI (`play`/`stop`/`power`/`button`) and are routed
   back into the same two actions via `Controller.on_cli_command`.
 
+**What the LARA displays.** It polls `<mac> current_title ?` and `<mac> artist ?` every few
+seconds while playing, so those two answers *are* its two display lines. The librespot event
+hook writes the track from `track_changed` into `/tmp/spotify_track_<mount>` (line 1 title,
+line 2 artists joined with ", "), `Controller.update_now_playing()` copies it onto the Player,
+and `lmscli._title()`/`_artist()` serve it — falling back to the zone name when no track has
+been reported, which is better than a blank display. Env var names differ across librespot
+versions, so the hook tries `NAME`/`TRACK_NAME`/`ITEM_NAME` and `ARTISTS`/`ARTIST`/`ALBUM_ARTISTS`.
+
 `control_mode`: `slimproto` (default) or `off` (discover + log only; safe for testing).
 Preset control (path A over 61695) still exists in `laradev.py` but is no longer wired up.
 
