@@ -1,17 +1,18 @@
-"""Minimal SlimProto (Squeezebox) server — path B2, a CONDITIONAL UPGRADE.
+"""SlimProto (Squeezebox) server — the way we drive a LARA's audio zone.
 
-Drives a SlimProto player (LARA in 'slim server' mode: slim_server_active + IP_slim_server=<us>)
-to fetch + play an arbitrary Icecast MP3 URL, with play/stop/volume/switch control. Byte layouts
-verified against squeezelite + music-assistant/aioslimproto. NOT the default path — enable only
-after a real LARA is confirmed to dial in on :3483 and advertise 'mp3' (see docs/README).
+Drives a SlimProto player (LARA with "Audio zone function" enabled + slim-server IP = us)
+to fetch + play our Icecast MP3 mount, with play/stop/power/volume control. Byte layouts
+verified against squeezelite + music-assistant/aioslimproto AND a real LARA (fw 3.7.001).
 
-The player fetches audio DIRECTLY from server_ip:server_port (our Icecast), not proxied — so this
-reuses the whole existing Icecast/Liquidsoap/librespot stack unchanged.
+The player fetches audio DIRECTLY from server_ip:server_port (our Icecast), not proxied.
+
+Power: SlimProto has no "power" opcode — LMS powers a player down by muting its outputs
+(`aude 0 0`) after stopping the stream, and tells the UI over the CLI (`<mac> power 0`).
+That is what `set_power()` does; `lmscli.py` mirrors it to the LARA's CLI connection.
 """
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import re
 import struct
@@ -20,6 +21,24 @@ log = logging.getLogger("lr3.slim")
 
 SLIMPROTO_PORT = 3483
 _MP3_CODEC = b"m\x3f\x3f\x3f\x3f"  # 'm' = mp3 + 4 ignored pcm bytes
+
+# STAT payload (player -> server), big-endian, unpadded. Fields:
+#   0 event  1 num_crlf  2 mas_init  3 mas_mode  4 rptr_buf_size  5 rptr_buf_fullness
+#   6 bytes_received  7 signal_strength  8 jiffies  9 output_buf_size  10 output_buf_fullness
+#   11 elapsed_seconds  12 voltage  13 elapsed_ms  14 server_timestamp  [15 error_code]
+# LARA fw 3.7.001 sends **51 bytes** — it omits the trailing error_code. Try the long layout
+# first, fall back to the short one.
+_STAT_FMT = "!4sBBBLLQHLLLLHLLH"
+_STAT_FMT_SHORT = "!4sBBBLLQHLLLLHLL"
+_STAT_LEN = struct.calcsize(_STAT_FMT)
+_STAT_LEN_SHORT = struct.calcsize(_STAT_FMT_SHORT)
+
+# Player event codes -> the mode string the LMS CLI reports.
+_MODE_BY_EVENT = {
+    b"STMs": "play", b"STMr": "play", b"STMl": "play",
+    b"STMp": "pause",
+    b"STMf": "stop", b"STMu": "stop", b"STMo": "stop", b"STMn": "stop",
+}
 
 
 def _frame(command: bytes, payload: bytes = b"") -> bytes:
@@ -56,23 +75,45 @@ class Player:
         self.dev_id = dev_id
         self.caps = caps
         self.writer = writer
+        self.ip = (writer.get_extra_info("peername") or ("", 0))[0]
         self.current_mount: str | None = None
+        self.powered = False
+        self.mode = "stop"          # play | pause | stop  (from STAT events)
+        self.elapsed = 0.0          # seconds into the stream
+        self.volume = 90
+        self.title = ""
+
+    @property
+    def name(self) -> str:
+        m = re.search(r"ModelName=([^,]+)", self.caps)
+        return m.group(1) if m else "LARA"
 
     def has_codec(self, name: str) -> bool:
         return name.lower() in self.caps.lower()
 
 
 class SlimProtoServer:
-    def __init__(self, our_ip: str, icecast_port: int = 8121, on_connect=None):
+    def __init__(self, our_ip: str, icecast_port: int = 8121,
+                 on_connect=None, on_disconnect=None, on_state=None):
         self.our_ip = our_ip
         self.icecast_port = icecast_port
         self.players: dict[str, Player] = {}
-        self.on_connect = on_connect  # callback(Player)
+        self.on_connect = on_connect        # callback(Player)
+        self.on_disconnect = on_disconnect  # callback(Player)
+        self.on_state = on_state            # callback(Player, what: str) — for the LMS CLI
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self):
         self._server = await asyncio.start_server(self._handle, "0.0.0.0", SLIMPROTO_PORT)
         log.info("SlimProto server listening on :%d", SLIMPROTO_PORT)
+
+    def _notify(self, player: Player, what: str):
+        if not self.on_state:
+            return
+        try:
+            self.on_state(player, what)
+        except Exception:
+            log.exception("on_state callback failed")
 
     async def _send(self, player: Player, command: bytes, payload: bytes = b""):
         try:
@@ -93,7 +134,8 @@ class SlimProtoServer:
                 if op == b"HELO":
                     player = await self._on_helo(data, writer)
                 elif op == b"STAT":
-                    pass  # absorb STAT keepalives; keeps the player streaming
+                    if player:
+                        self._on_stat(player, data)
                 elif op == b"BYE!":
                     break
                 else:
@@ -104,6 +146,11 @@ class SlimProtoServer:
             if player and self.players.get(player.mac) is player:
                 del self.players[player.mac]
                 log.info("LARA %s disconnected", player.mac)
+                if self.on_disconnect:
+                    try:
+                        self.on_disconnect(player)
+                    except Exception:
+                        log.exception("on_disconnect callback failed")
             try:
                 writer.close()
             except Exception:
@@ -124,15 +171,41 @@ class SlimProtoServer:
         await self._send(player, b"vers", b"7.9")
         await self._send(player, b"setd", bytes([0xFE]))
         await self._send(player, b"setd", bytes([0x00]))
-        await self._send(player, b"aude", bytes([1, 1]))   # enable SPDIF + DAC outputs
-        await self.set_volume(mac_str, 90)
+        # Start powered-down: outputs muted until Spotify actually plays. Without this the
+        # LARA can sit in the audio zone silently "on" from the moment it dials in.
+        await self._send(player, b"aude", bytes([0, 0]))
+        await self.set_volume(mac_str, player.volume)
         asyncio.create_task(self._heartbeat(player))
         if self.on_connect:
             try:
                 self.on_connect(player)
             except Exception:
                 log.exception("on_connect callback failed")
+        self._notify(player, "connect")
         return player
+
+    def _on_stat(self, player: Player, data: bytes):
+        """Track mode + elapsed time from the player's STAT frames (feeds the LMS CLI)."""
+        if len(data) >= _STAT_LEN:
+            f = struct.unpack(_STAT_FMT, data[:_STAT_LEN])
+        elif len(data) >= _STAT_LEN_SHORT:
+            f = struct.unpack(_STAT_FMT_SHORT, data[:_STAT_LEN_SHORT])
+        else:
+            if len(data) >= 4:
+                log.debug("LARA %s runt STAT %r (%d B)", player.mac, data[:4], len(data))
+                self._apply_event(player, data[:4])
+            return
+        player.elapsed = f[13] / 1000.0 if f[13] else float(f[11])
+        log.debug("LARA %s STAT %r out_buf=%d/%d in_buf=%d/%d bytes_rx=%d elapsed=%.1f",
+                  player.mac, f[0], f[10], f[9], f[5], f[4], f[6], player.elapsed)
+        self._apply_event(player, f[0])
+
+    def _apply_event(self, player: Player, event: bytes):
+        mode = _MODE_BY_EVENT.get(event)
+        if mode and mode != player.mode:
+            player.mode = mode
+            log.info("LARA %s %s -> mode=%s", player.mac, event.decode("ascii", "replace"), mode)
+            self._notify(player, "mode")
 
     async def _heartbeat(self, player: Player):
         hb = 0
@@ -143,10 +216,24 @@ class SlimProtoServer:
 
     # --- public API ------------------------------------------------------------
     async def push_stream(self, mac: str, mount: str) -> bool:
-        """Tell LARA <mac> to play http://<us>:<icecast_port>/<mount>."""
+        """Power the LARA up and tell it to play http://<us>:<icecast_port>/<mount>.
+
+        Parameters below are not free choices — they were found by probing a real LARA
+        (fw 3.7.001); every other combination left it in STMc with bytes_received=0:
+
+        * ``server_ip=0`` — **the** fix. A LARA ignores an explicit address here and only
+          fetches when told "use the IP of the control connection". Harmless for us: the
+          add-on serves Icecast from the same host it runs the SlimProto server on.
+        * ``autostart='1'`` (buffer, then start) rather than '3' — this firmware does not
+          take the "direct streaming" variants.
+        * ``threshold`` in KB must fit the player's input buffer, which it reports as
+          131072 B. The old 200 KB was unreachable; 64 KB is ~2.7 s at 192 kbps, enough
+          to ride out jitter (20 KB underran within seconds).
+        """
         p = self.players.get(mac)
         if not p:
             return False
+        await self.set_power(mac, True)
         path = "/" + mount.lstrip("/")
         host = f"{self.our_ip}:{self.icecast_port}"
         http = (
@@ -154,13 +241,15 @@ class SlimProtoServer:
             "Connection: close\r\nAccept: */*\r\n\r\n"
         ).encode()
         body = _strm_body(
-            b"s", autostart=b"3", threshold=200, output_threshold=20,
-            server_port=self.icecast_port, server_ip=int(ipaddress.ip_address(self.our_ip)),
+            b"s", autostart=b"1", threshold=64, output_threshold=10,
+            server_port=self.icecast_port, server_ip=0,
             http=http,
         )
         await self._send(p, b"strm", body)
         p.current_mount = mount
+        p.mode = "play"
         log.info("LARA %s -> play %s", mac, path)
+        self._notify(p, "play")
         return True
 
     async def stop(self, mac: str):
@@ -168,10 +257,36 @@ class SlimProtoServer:
         if p:
             await self._send(p, b"strm", _strm_body(b"q"))
             p.current_mount = None
+            p.mode = "stop"
+            p.elapsed = 0.0
+            self._notify(p, "stop")
+
+    async def pause(self, mac: str, paused: bool = True):
+        p = self.players.get(mac)
+        if p:
+            await self._send(p, b"strm", _strm_body(b"p" if paused else b"u"))
+            p.mode = "pause" if paused else "play"
+            self._notify(p, "mode")
+
+    async def set_power(self, mac: str, on: bool):
+        """LMS-style power: enable/mute the player's outputs. Off = the zone goes dark."""
+        p = self.players.get(mac)
+        if not p or p.powered == on:
+            return
+        await self._send(p, b"aude", bytes([1, 1]) if on else bytes([0, 0]))
+        p.powered = on
+        log.info("LARA %s power=%s", mac, "on" if on else "off")
+        self._notify(p, "power")
 
     async def set_volume(self, mac: str, vol: int):
         p = self.players.get(mac)
         if not p:
             return
-        g = int(max(0, min(100, vol)) / 100.0 * 65536)
+        vol = int(max(0, min(100, vol)))
+        g = int(vol / 100.0 * 65536)
         await self._send(p, b"audg", struct.pack("!LLBBLL", g, g, 1, 255, g, g))
+        p.volume = vol
+        self._notify(p, "volume")
+
+    def stream_url(self, mount: str) -> str:
+        return f"http://{self.our_ip}:{self.icecast_port}/{mount.lstrip('/')}"

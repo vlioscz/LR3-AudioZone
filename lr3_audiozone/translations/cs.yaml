@@ -22,23 +22,42 @@ configuration:
     description: >-
       Jméno, pod kterým se addon objeví v aplikaci Spotify jako Connect zařízení
       (= název audio zóny). Pustíš do něj hudbu a addon ji přepošle do LARA rádií.
-  fallback_enabled:
-    name: Záložní rádio zapnuté
+  zone_volume:
+    name: Hlasitost zóny (%)
     description: >-
-      Zapnuto: po prodlevě nečinnosti Spotify naskočí do streamu záložní online
-      rádio (LARA hraje dál). Vypnuto: po prodlevě ticho a LARA se zastaví.
-  fallback_url:
-    name: URL záložního rádia
-    description: Online rádio, které hraje jako záloha, když Spotify nehraje.
-  fallback_delay:
-    name: Prodleva zálohy (s)
-    description: Sekundy ticha (Spotify nehraje), než naskočí záloha / se LARA zastaví.
+      Hlasitost, na kterou se LARA nastaví při zapnutí audio zóny (0–100).
+      Hlasitost jde pak měnit i přímo na LAŘE.
+  idle_timeout:
+    name: Prodleva vypnutí (s)
+    description: >-
+      Kolik sekund musí být Spotify v klidu (pauza/stop), než se LARA vypne a
+      opustí audio zónu. Krátká pauza nebo přechod mezi skladbami ji tedy nevypne.
   control_mode:
     name: Ovládání LARA
     description: >-
-      slimproto = addon je SlimProto (Squeezebox) server na :3483 a pushuje stream
-      do LARA, když se spustí Spotify (výchozí). off = jen najít LARA rádia a vypsat
-      je do logu, nic nepřepínat (pro testování).
+      slimproto = addon je Slim server (SlimProto :3483 + LMS CLI) a přepíná LARA
+      do audio zóny, když hraje Spotify (výchozí). off = jen najít LARA rádia a
+      vypsat je do logu, nic nepřepínat (pro testování).
+  cli_port:
+    name: LMS CLI port
+    description: >-
+      Port, na kterém addon poslouchá textové LMS CLI — tudy si LARA říká, co hraje,
+      a posílá stisky vlastních tlačítek. Musí sedět s „CLI port" v konfiguraci
+      audio zóny v LAŘE (výchozí 9595).
+  cli_username:
+    name: LMS CLI — uživatel
+    description: >-
+      Jméno, kterým se LARA hlásí na CLI. Nech prázdné, pokud v LAŘE žádné není.
+  cli_password:
+    name: LMS CLI — heslo
+    description: >-
+      Heslo, kterým se LARA hlásí na CLI. Nech prázdné, pokud v LAŘE žádné není.
+  lara_off_action:
+    name: Co udělat při vypnutí zóny
+    description: >-
+      slim = zastavit stream a ztlumit výstupy přes SlimProto (výchozí).
+      slim_elko = navíc poslat LAŘE stop přes ELKO protokol na portu 61695.
+      none = nedělat nic, LARA zůstane v audio zóně.
   lara_username:
     name: LARA — uživatel
     description: Přihlašovací jméno k LARA rádiím (výchozí „admin").

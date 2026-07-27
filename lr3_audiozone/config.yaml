@@ -1,7 +1,7 @@
 name: LR3 AudioZone
 slug: lr3_audiozone
-version: "0.1.0"
-description: Spotify Connect → automatické přehrání na ELKO EP „LARA" přes Slim server (SlimProto)
+version: "0.2.0"
+description: Spotify Connect → automatické přehrání na ELKO EP „LARA" přes Slim server (SlimProto + LMS CLI)
 url: https://github.com/vlioscz/LR3-AudioZone
 arch:
   - aarch64
@@ -17,10 +17,13 @@ options:
   bitrate: 192
   spotify_bitrate: 320
   zone_name: "Audio zóna"
-  fallback_enabled: false
-  fallback_url: "http://ice.actve.net/fm-evropa2-128"
-  fallback_delay: 15
+  zone_volume: 90
+  idle_timeout: 20
   control_mode: "slimproto"
+  cli_port: 9595
+  cli_username: ""
+  cli_password: ""
+  lara_off_action: "slim"
   lara_username: "admin"
   lara_password: "elkoep"
   lara_hosts: []
@@ -31,10 +34,13 @@ schema:
   bitrate: int
   spotify_bitrate: list(96|160|320)
   zone_name: str
-  fallback_enabled: bool
-  fallback_url: str
-  fallback_delay: int
+  zone_volume: int(0,100)
+  idle_timeout: int(0,3600)
   control_mode: list(off|slimproto)
+  cli_port: int
+  cli_username: str?
+  cli_password: password?
+  lara_off_action: list(slim|slim_elko|none)
   lara_username: str
   lara_password: password
   lara_hosts:

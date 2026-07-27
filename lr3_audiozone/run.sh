@@ -13,13 +13,12 @@ log() { echo "[LR3AZ] $*"; }
 
 PORT=$(jq -r '.port // 8121' "$OPTIONS")
 SRCPASS=$(jq -r '.source_password // "changeme"' "$OPTIONS")
-FALLBACK_URL=$(jq -r '.fallback_url // "http://ice.actve.net/fm-evropa2-128"' "$OPTIONS")
-FALLBACK_DELAY=$(jq -r '.fallback_delay // 15' "$OPTIONS")
-FALLBACK_ENABLED=$(jq -r '.fallback_enabled // false' "$OPTIONS")
 BITRATE=$(jq -r '.bitrate // 192' "$OPTIONS")
 SPOTIFY_BITRATE=$(jq -r '.spotify_bitrate // 320' "$OPTIONS")
 ZONE_NAME=$(jq -r '.zone_name // "Audio zóna"' "$OPTIONS")
 CMODE=$(jq -r '.control_mode // "slimproto"' "$OPTIONS")
+IDLE_TIMEOUT=$(jq -r '.idle_timeout // 20' "$OPTIONS")
+CLI_PORT=$(jq -r '.cli_port // 9595' "$OPTIONS")
 
 # Zjisti LAN IP hostitele (host_network: true → kontejner ji sdílí).
 HA_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -28,11 +27,7 @@ ICE_HOSTNAME="$HA_IP"
 [ "$ICE_HOSTNAME" = "<HA_IP>" ] && ICE_HOSTNAME="localhost"
 
 log "Startuji LR3 AudioZone (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
-if [ "${FALLBACK_ENABLED}" = "true" ]; then
-  log "Fallback rádio: ${FALLBACK_URL} (prodleva ${FALLBACK_DELAY}s)"
-else
-  log "Fallback rádio: VYPNUTO — po ${FALLBACK_DELAY}s nečinnosti ticho a LARA se zastaví"
-fi
+log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti se LARA vypne"
 
 # --- D-Bus + Avahi (librespot z raspotify používá avahi zeroconf backend) ---
 log "Spouštím D-Bus + Avahi (pro Spotify Connect discovery)..."
@@ -87,9 +82,6 @@ sed -e "s|%%PORT%%|${PORT}|g" \
     -e "s|%%SOURCE_PASSWORD%%|${SRCPASS}|g" \
     -e "s|%%BITRATE%%|${BITRATE}|g" \
     -e "s|%%SPOTIFY_BITRATE%%|${SPOTIFY_BITRATE}|g" \
-    -e "s|%%FALLBACK_URL%%|${FALLBACK_URL}|g" \
-    -e "s|%%FALLBACK_DELAY%%|${FALLBACK_DELAY}|g" \
-    -e "s|%%FALLBACK_ENABLED%%|${FALLBACK_ENABLED}|g" \
     -e "s|%%MOUNT%%|${MOUNT}|g" \
     -e "s|%%ZONE_NAME%%|${ZONE_NAME}|g" \
     "${TPL_DIR}/radio.liq.tpl" > "${LIQ}"
@@ -105,8 +97,10 @@ echo "  LR3 AudioZone"
 echo "------------------------------------------------------------------"
 echo "  Spotify zařízení:  ${ZONE_NAME}   (vyber v appce, Premium, stejná síť)"
 echo "  Icecast mount:     http://${HA_IP}:${PORT}/${MOUNT}"
-echo "  Režim ovládání:    ${CMODE}   (SlimProto server na :3483)"
+echo "  Režim ovládání:    ${CMODE}   (SlimProto :3483 + LMS CLI :${CLI_PORT})"
+echo "  V LAŘE nastav:     Audio zone function = ZAP, slim server IP = ${HA_IP}, CLI port = ${CLI_PORT}"
 echo "  → Pusť Spotify do '${ZONE_NAME}' a nalezená LARA rádia se přepnou na audio zónu."
+echo "  → Po ${IDLE_TIMEOUT}s bez Spotify se LARA zase vypnou."
 echo "=================================================================="
 
 # --- SlimProto controller (discovery + push na LARA při Spotify-active) ---

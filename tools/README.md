@@ -16,6 +16,7 @@ SlimProto/discovery on Windows you must allow the inbound ports (Admin PowerShel
 | `slim_listen.ps1` | Minimal SlimProto listener on :3483 — logs the LARA's **HELO** and advertised **codecs** (the B2 gate). Point a LARA at this host first. |
 | `check_stream.py <url>` | Confirms an MP3 stream URL is live (before pushing it to a LARA). |
 | `play_test.py <our-ip> [url]` | Runs the **real** `slimproto.py` server + pushes `strm-s` so the LARA plays the URL. The actual play test. |
+| `zone_test.py <our-ip>` | **The full zone test.** Runs the real `slimproto.py` (:3483) **and** `lmscli.py` (:9595) with debug logging — shows whether the LARA opens the CLI connection and what it sends. Interactive: `on` / `off` / `vol <0-100>` / `status` / `quit`. |
 | `web_explore.py <ip> [user] [pass]` | Digest-auth crawl of the LARA web UI to locate the "Audio zone function" / slim-server fields (`audio_zone_ip`, `controll_bit_az`, CLI 9595). Read-only. |
 | `_elko.ps1` | Shared ELKO protocol helpers dot-sourced by the PowerShell tools (not run directly). |
 
@@ -27,4 +28,5 @@ python web_explore.py <lara-ip>                       # find the slim config (th
 powershell -File slim_listen.ps1                      # (after pointing LARA at us) confirm HELO + mp3
 python check_stream.py <mp3-url>
 python play_test.py <our-ip> <mp3-url>                # real strm-s play test
+python zone_test.py <our-ip>                          # full zone: SlimProto + LMS CLI, on/off/vol
 ```

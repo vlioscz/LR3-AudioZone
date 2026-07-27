@@ -22,23 +22,41 @@ configuration:
     description: >-
       The name the add-on shows in the Spotify app as a Connect device (= the
       audio-zone name). Play to it and the add-on pushes the audio to the LARA radios.
-  fallback_enabled:
-    name: Fallback radio enabled
+  zone_volume:
+    name: Zone volume (%)
     description: >-
-      On: the fallback online radio starts after the Spotify idle delay (LARA keeps
-      playing). Off: the stream goes silent after the delay and LARA is stopped.
-  fallback_url:
-    name: Fallback radio URL
-    description: Online radio that plays as a fallback when Spotify is not playing.
-  fallback_delay:
-    name: Fallback delay (s)
-    description: Seconds of silence (Spotify idle) before the fallback / LARA stop.
+      Volume the LARA is set to when the audio zone switches on (0-100).
+      You can still change it on the LARA itself afterwards.
+  idle_timeout:
+    name: Power-off delay (s)
+    description: >-
+      How many seconds Spotify has to stay idle (paused/stopped) before the LARA is
+      powered off and leaves the audio zone. Short pauses and track changes do not
+      switch it off.
   control_mode:
     name: LARA control
     description: >-
-      slimproto = the add-on is a SlimProto (Squeezebox) server on :3483 and pushes
-      the stream to LARA when Spotify starts (default). off = only discover LARA
-      radios and log them, never switch (for testing).
+      slimproto = the add-on is a Slim server (SlimProto :3483 + LMS CLI) and switches
+      the LARA into the audio zone whenever Spotify plays (default). off = only discover
+      LARA radios and log them, never switch (for testing).
+  cli_port:
+    name: LMS CLI port
+    description: >-
+      Port the add-on serves the text LMS CLI on — the LARA uses it to learn what is
+      playing and to send its own button presses. Must match the "CLI port" in the
+      LARA's audio-zone configuration (9595 by default).
+  cli_username:
+    name: LMS CLI username
+    description: Username the LARA logs in with on the CLI. Leave empty if the LARA has none.
+  cli_password:
+    name: LMS CLI password
+    description: Password the LARA logs in with on the CLI. Leave empty if the LARA has none.
+  lara_off_action:
+    name: Zone power-off action
+    description: >-
+      slim = stop the stream and mute the outputs over SlimProto (default).
+      slim_elko = additionally send a stop over the ELKO protocol on port 61695.
+      none = do nothing, leave the LARA sitting in the audio zone.
   lara_username:
     name: LARA username
     description: Login name for the LARA radios (default "admin").

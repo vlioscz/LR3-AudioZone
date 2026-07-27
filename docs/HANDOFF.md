@@ -11,8 +11,27 @@ architecture) and the runnable scripts in `tools/`. Written 2026-07-27 after the
   SlimProto **HELO gate PASSED**, LARA advertises **`mp3`**, and a pushed **`strm-s` switched the
   LARA to its "Audio zóna" source**.
 - **Not yet verified on-device:** the fully **automatic** flow (Spotify-active → discover → push →
-  LARA *audibly* plays, and back to fallback/stop on pause). The add-on (v0.1.0) is scaffolded and
-  its parts are proven individually; the end-to-end loop needs one more on-device session.
+  LARA *audibly* plays, and back to off on pause). The add-on (v0.2.0) is complete and its parts
+  are proven individually; the end-to-end loop needs one more on-device session.
+
+## 0.2.0 — what changed (2026-07-27)
+
+The fallback radio is **gone**. It was the LR3-Stream-era workaround (keep a stream alive so the
+LARA always has something to play); with the Slim path working we drive the LARA directly instead:
+
+- `radio.liq.tpl` — only Spotify → silence. The silence exists purely so the Icecast mount never
+  dies, because the LARA has to be able to fetch it the instant we send `strm-s`.
+- `slimproto.py` — added LMS-style **power** (`aude 1 1` / `aude 0 0`; a player starts powered
+  **down** at HELO), **STAT parsing** (mode + elapsed, 53-byte struct), `pause()`, `stream_url()`,
+  and `on_disconnect`/`on_state` callbacks.
+- `lmscli.py` — **new**: the LMS CLI server on :9595 (see below).
+- `controller.py` — single mount, idle→off state machine (`idle_timeout`), radios learned from
+  SlimProto connections as well as UDP discovery, LARA button presses routed back from the CLI.
+- options: `fallback_*` removed; added `idle_timeout`, `zone_volume`, `cli_port`, `cli_username`,
+  `cli_password`, `lara_off_action`.
+
+⚠️ Supervisor keeps previously saved options. If the add-on refuses to start after the update
+because of the removed `fallback_*` keys, open its Configuration tab and save it again.
 
 ## Proven vs. left
 
@@ -23,18 +42,42 @@ architecture) and the runnable scripts in `tools/`. Written 2026-07-27 after the
   heartbeat) keeps the LARA connected; a minimal listener drops it after ~17 s.
 - `push_stream` (`strm-s`) makes the LARA switch its source to "Audio zóna".
 
-**Left (do these on-device)**
-1. Confirm **audible** playback of `/default` via the auto controller (`control_mode: slimproto`),
-   i.e. run the add-on (or `tools/play_test.py` first), play Spotify to the "Audio zóna" device, hear it.
-2. Pause → after `fallback_delay` either fallback radio (LARA keeps playing) or **stop** the LARA;
-   resume → instant. Verify `stop` (`strm-q`) and `set_volume` (`audg`).
-3. Mount-switch **latency**; **multiple LARAs** at once (mount `default` → all discovered radios).
-4. **LMS CLI (port 9595):** the LARA's "Audio zone" config also has a CLI port + LMS user/pass.
-   Open question whether the LARA needs the CLI for full zone control/sync, or SlimProto `strm`
-   alone suffices (basic play worked over 3483 without us serving 9595). If needed, add a minimal
-   CLI responder (telnet-style LMS command interface).
-5. Does some firmware also need a **61695 SOURCE-select** alongside `strm`? (Ours didn't — `strm`
-   alone switched it.)
+**Proven on the device 2026-07-27 (the 0.2.0 session)**
+- **Audio actually plays.** 60 s continuous, `bytes_rx` 1.46 MB, input buffer steady at ~62 KB of
+  the 128 KB the player reports, **zero underruns**. `strm-q` + `aude 0 0` closes the audio
+  connection (`STMf`) and the LARA stays off.
+- **This required `server_ip=0` in `strm-s`.** With an explicit address the LARA sits in `STMc`
+  with `bytes_received=0` — source switches to "Audio zóna", but silence. Probe of 8 variants:
+  `autostart=1, thr=20, ip=ours` failed; the same with `ip=0` fetched within a second. Also
+  `autostart='1'` (not `'3'` — no direct streaming) and `threshold=64` KB (200 exceeded the
+  player's buffer; 20 underran).
+- **The LARA opens the LMS CLI on :9595** — open question #4 answered, it is a real dependency.
+  Verbatim session: `login admin elkoep`, `<mac> artist ?`, `<mac> stop`, `<mac> mixer volume 95`,
+  then `playlist tracks ?` every 5 s. It never sends `listen 1` (polls instead of subscribing).
+  The initial `stop` is state sync — treating it as a button made the controller flap, so
+  `lmscli.HANDSHAKE_GRACE` ignores transport commands for the first 5 s of a session.
+- STAT frames are **51 B** on this fw (no trailing `error_code`).
+
+Also proven offline (unit-level): `strm` body is 24 B + the embedded HTTP request, STAT parses to
+mode/elapsed, the CLI dispatch answers every implemented command on a single line, and the
+controller state machine handles on/idle/off/resume plus SlimProto-only discovery.
+
+**Left**
+1. The add-on itself on HA (`control_mode: slimproto`): play Spotify to the "Audio zóna" device →
+   LARA plays; pause → after `idle_timeout` it powers off; resume → back instantly. Only the
+   controller's state machine is untested on hardware — both of its ends now are.
+2. **Audibility + volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its
+   scale is not ours. Pick a sane `zone_volume` (or 0 = leave the knob alone) by ear.
+3. Does `aude 0 0` make the unit *visibly* leave the zone, or only mute it? If only mute, try
+   `lara_off_action: slim_elko` (adds a 61695 stop).
+4. **Multiple LARAs** at once; mount-switch latency.
+
+Testing without deploying the add-on:
+```
+python tools/zone_test.py <this-ip> --port 8121 --proxy http://<some-icecast>/mount
+```
+`--proxy` serves the upstream stream from *this* host, which is what the LARA requires (see
+`server_ip=0` above) and logs every audio fetch. Then type `on` / `off` / `vol 40` / `status`.
 
 ## Device-side prerequisite (must be set on each LARA)
 
@@ -61,6 +104,7 @@ via a path relative to the script, so they work wherever the repo lives. See `to
 | SlimProto HELO gate | `tools/slim_listen.ps1`  (listen :3483, log HELO + caps) — point a LARA at this host first |
 | Verify an MP3 stream is live | `python tools/check_stream.py <url>` |
 | Full play test (real slimproto.py) | `python tools/play_test.py <our-ip> <mp3-url>` — runs the real server + pushes `strm-s` |
+| **Full zone test (SlimProto + LMS CLI)** | `python tools/zone_test.py <our-ip>` — the real `slimproto.py` + `lmscli.py`, verbose; type `on`/`off`/`vol 60`/`status` |
 
 ## Windows dev-env notes (same laptop)
 
@@ -70,6 +114,7 @@ via a path relative to the script, so they work wherever the repo lives. See `to
   ```
   New-NetFirewallRule -DisplayName "LR3 SlimProto 3483" -Direction Inbound -Protocol TCP -LocalPort 3483 -Action Allow -Profile Any
   New-NetFirewallRule -DisplayName "LR3 SlimProto UDP 3483" -Direction Inbound -Protocol UDP -LocalPort 3483 -Action Allow -Profile Any
+  New-NetFirewallRule -DisplayName "LR3 LMS CLI 9595" -Direction Inbound -Protocol TCP -LocalPort 9595 -Action Allow -Profile Any
   ```
   (LARA UDP discovery replies come to :61695 — allow UDP 61695 too if you rely on `discover.ps1`.)
   Clean up later: `Remove-NetFirewallRule -DisplayName "LR3 SlimProto 3483"` (etc.).
