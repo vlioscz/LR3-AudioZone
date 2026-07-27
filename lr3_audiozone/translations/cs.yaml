@@ -42,9 +42,9 @@ configuration:
   zone_volume:
     name: Výchozí hlasitost zóny (%)
     description: >-
-      Hlasitost, na kterou se LARA nastaví ve chvíli, kdy se zóna zapne. Potom už ji addon
-      nesahá a řídí se výhradně tlačítky na rádiu (ve Spotify se posuvník hlasitosti záměrně
-      nezobrazuje). 0 = hlasitost rádia vůbec neměnit a nechat ji tak, jak byla.
+      Hlasitost, kterou addon pošle rádiu při zapnutí zóny. Pozor: na firmwaru 3.7.001 se
+      zdá, že se na výstupu neprojeví — hlasitost se reálně ovládá posuvníkem v aplikaci
+      Spotify. 0 = nastavení hlasitosti rádiu vůbec neposílat.
   buffer_seconds:
     name: Náskok bufferu (s)
     description: >-

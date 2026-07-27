@@ -113,7 +113,21 @@ container; if not, the variable is called something else and the hook needs one 
 Also note `run.sh` no longer starts Liquidsoap — the controller renders `radio.liq.tpl` per zone,
 spawns one Liquidsoap each, restarts any that die, and kills them on SIGTERM.
 
-## 0.3.2 — volume, settled
+## 0.3.3 — volume, actually settled
+
+On the device the LARA's volume buttons turned out to only **mute/unmute** while an audio zone
+plays, and answering their `mixer volume` with `audg` (0.3.2) changed nothing audible — `audg`
+appears to have no effect on this firmware's output at all. There is therefore **no usable
+volume control on the radio**, which settles the question: volume lives in librespot's software
+volume, `--volume-ctrl fixed` is gone, and the Spotify slider is back and is the only control.
+
+`mixer volume`, `mixer muting` and unhandled `mixer` verbs are now logged at **INFO**, so if
+someone wants to give those buttons a real effect, the add-on log shows what they actually send.
+`zone_volume` still emits one `audg` at zone-on; on this firmware that is probably a no-op.
+
+The rest of the 0.3.2 note below is history — kept because it records what was tried.
+
+## 0.3.2 — volume, first attempt
 
 **The LARA's volume buttons had been dead since 0.2.1.** The unit has no local volume path while
 it plays an audio zone: a press goes out as `<mac> mixer volume <n>` on the LMS CLI and it waits

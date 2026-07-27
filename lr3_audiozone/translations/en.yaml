@@ -42,9 +42,9 @@ configuration:
   zone_volume:
     name: Default zone volume (%)
     description: >-
-      Volume the LARA is set to at the moment the zone switches on. After that the add-on
-      leaves it alone and the radio's own buttons are in charge (the Spotify app deliberately
-      shows no volume slider). 0 = never touch the radio's volume, leave it as it was.
+      Volume the add-on sends to the radio when the zone switches on. Note: on firmware 3.7.001
+      this appears to have no effect on the output - volume is really controlled with the slider
+      in the Spotify app. 0 = never send a volume to the radio at all.
   buffer_seconds:
     name: Buffer lead (s)
     description: >-

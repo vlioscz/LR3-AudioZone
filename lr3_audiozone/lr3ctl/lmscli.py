@@ -330,15 +330,20 @@ class LmsCliServer:
                     vol = p.volume + int(val) if val[0] in "+-" else int(val)
                 except ValueError:
                     return tokens
-                # This is the LARA's volume control, and it is a REQUEST, not a report: the
-                # unit has no local volume path while it plays an audio zone, it tells the
-                # server what it wants and waits for an `audg`. Not answering leaves its
-                # volume buttons dead — which is exactly what happened between 0.2.1 and
-                # 0.3.1, when this was treated as read-only state.
-                await self.slim.set_volume(p.mac, max(0, min(100, vol)))
+                # Recorded, not acted on. Answering with `audg` was tried (0.3.2) to give the
+                # LARA's volume buttons an effect; on fw 3.7.001 they still only mute/unmute
+                # and the gain never reaches the output. Volume therefore lives in librespot,
+                # and sending `audg` here would only add a second, invisible stage.
+                p.volume = max(0, min(100, vol))
+                log.info("LARA %s reports volume=%d", p.mac, p.volume)
                 return tokens
             if what == "muting":
+                # Logged at INFO on purpose: the LARA's volume buttons behave as mute/unmute
+                # on fw 3.7.001 and we still do not know what they actually send. Whatever
+                # turns up here is the evidence needed to give them a real effect.
+                log.info("LARA %s mixer muting %s", p.mac, val)
                 return self._reply(tokens, 0)
+            log.info("LARA %s mixer %s (unhandled)", p.mac, " ".join(cmd[1:]))
             return tokens
 
         # --- transport (the LARA's own buttons land here) --------------------

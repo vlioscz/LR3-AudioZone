@@ -1,6 +1,6 @@
 name: LR3 AudioZone
 slug: lr3_audiozone
-version: "0.3.2"
+version: "0.3.3"
 description: Spotify Connect → automatické přehrání na ELKO EP „LARA" přes Slim server (SlimProto + LMS CLI)
 url: https://github.com/vlioscz/LR3-AudioZone
 arch:

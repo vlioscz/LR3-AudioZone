@@ -103,18 +103,21 @@ A LARA that dials in on :3483 is **added to the inventory even if the scan never
   discovery, SlimProto, the CLI — is unauthenticated. There is deliberately no option to pick
   a weaker behaviour: the alternatives all left the zone hanging on the display.
 
-**Volume lives on the radio, and only there.** One control, by decision — two stages mean the
-sound can be turned down in two places and nobody can tell which.
-- `--volume-ctrl fixed` keeps the stream at full scale. Note what this flag really does: it
-  strips the Connect device of its volume capability, so **no slider appears in the Spotify
-  app at all**. It is not "report volume but don't apply it" — no stock librespot mixer does
-  that, which is why "the Spotify slider drives the LARA's hardware volume" is not buildable.
-- The LARA's volume buttons → `<mac> mixer volume <n>` on the LMS CLI → we answer with `audg`.
-  **This is a request, not a report.** While it plays an audio zone the unit has no local
-  volume path at all; if the server does not answer, its buttons are simply dead. Treating it
-  as read-only state (0.2.1–0.3.1) is exactly how that happened.
-- `zone_volume` is applied once, when the zone switches on (`0` = never touch it), and then
-  stays out of the way so the buttons own it.
+**Volume lives in Spotify** — librespot's software volume, i.e. **no** `--volume-ctrl` flag.
+One control, because two stages mean the sound can be turned down in two places and nobody can
+tell which. This took three attempts; the history is here so it is not re-litigated:
+- `--volume-ctrl fixed` (0.2.1–0.3.2) keeps the stream at full scale, but it also **strips the
+  Connect device of its volume capability**, so the slider disappears from the Spotify app
+  entirely. It is not "report volume but don't apply it" — no stock librespot mixer does that,
+  which is why "the Spotify slider drives the LARA's hardware volume" is **not buildable**.
+- Driving the LARA's hardware volume instead does not work either: on fw 3.7.001 its volume
+  buttons only **mute/unmute** while an audio zone plays, and `audg` has no audible effect on
+  the output. Answering `<mac> mixer volume <n>` with `audg` (0.3.2) changed nothing. So the
+  CLI value is recorded as state only, and logged at INFO — if we ever learn what those buttons
+  really send, that log is the evidence.
+- `zone_volume` still sends one `audg` when the zone switches on (`0` = never touch it). On this
+  firmware that appears to be a no-op; it is kept because it is the only hardware-level hook we
+  have and it costs one packet.
 
 ⚠️ The event hook must NOT write volume events into `spotify_state_*`: everything outside
 `ACTIVE_EVENTS` reads as "not playing", so a volume nudge mid-song would switch the zone off.

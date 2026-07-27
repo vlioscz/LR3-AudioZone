@@ -15,19 +15,19 @@ settings.init.allow_root.set(true)
 # Držíme ho krátký (0.4/0.8 s); rezervu proti jitteru drží vnitřní buffer librespotu
 # a práh v LAŘE (viz buffer_seconds), ne tenhle FIFO.
 #
-# Hlasitost patří JEN rádiu — vědomé rozhodnutí. --volume-ctrl fixed znamená, že stream jde
-# vždy v plné úrovni a posuvník v aplikaci Spotify se vůbec nezobrazí (ten přepínač Connect
-# zařízení schopnost hlasitosti odebere; není to „hlas hlas, ale neaplikuj ho"). Regulace tak
-# zůstává výhradně na LAŘE: její tlačítka nejedou lokálně, ale posílají `mixer volume` na náš
-# LMS CLI a čekají na `audg` — viz lmscli.py. Bez té odpovědi jsou tlačítka mrtvá.
-# Dva nezávislé stupně (posuvník na stream + tlačítka na hardware) by znamenaly, že se dá zvuk
-# ztlumit na dvou místech a nikdo nepozná kde — proto je tu jen jeden.
+# Hlasitost řeší librespot softwarově (výchozí chování, tj. BEZ --volume-ctrl fixed), takže
+# posuvník v aplikaci Spotify funguje a je to jediný ovladač hlasitosti.
+# Historie, ať se to nezkouší znovu: --volume-ctrl fixed drží stream v plné úrovni, ale zároveň
+# Connect zařízení odebere schopnost hlasitosti — posuvník v appce tím úplně zmizí. Šlo se na to
+# proto, aby hlasitost patřila rádiu; jenže na LAŘE fw 3.7.001 tlačítka hlasitosti při přehrávání
+# audio zóny fungují jen jako mute/unmute a `audg` se na výstupu neprojeví. Regulace na rádiu
+# tedy reálně neexistuje a jediné funkční místo je tady.
 # --onevent zapisuje stav do /tmp/spotify_state_<mount> a skladbu do /tmp/spotify_track_<mount>.
 spotify = input.external.rawaudio(
   id="spotify_%%MOUNT%%",
   restart=true, restart_on_error=true,
   buffer=0.4, max=0.8, log_overfull=false,
-  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --volume-ctrl fixed --initial-volume 100 --cache /data/librespot_%%MOUNT%% --cache-size-limit 1G --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
+  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --initial-volume 100 --cache /data/librespot_%%MOUNT%% --cache-size-limit 1G --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
 )
 
 # --- Ticho, aby byl mount vždy krmený ---
