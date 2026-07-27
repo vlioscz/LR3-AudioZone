@@ -1,0 +1,15 @@
+# Normalizace konců řádků. Soubory běžící v Linux kontejneru MUSÍ mít LF,
+# jinak se v HA (arm64) rozbije shebang / spuštění skriptů.
+* text=auto eol=lf
+
+*.sh       text eol=lf
+*.liq      text eol=lf
+*.tpl      text eol=lf
+*.xml      text eol=lf
+*.yaml     text eol=lf
+*.py       text eol=lf
+Dockerfile text eol=lf
+
+# Binární brand assety — nikdy nenormalizovat.
+*.png binary
+*.ico binary

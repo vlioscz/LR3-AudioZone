@@ -1,0 +1,52 @@
+configuration:
+  port:
+    name: Port
+    description: >-
+      Port, na kterém poslouchá lokální Icecast stream (odsud si ho LARA stáhne).
+      Adresa je http://<IP-HA>:<port>/default.
+  source_password:
+    name: Heslo zdroje (interní)
+    description: >-
+      Interní heslo Icecastu, kterým Liquidsoap publikuje stream, a heslo do
+      Icecast admin stránky. LARA ho NEPOTŘEBUJE. Klidně nech výchozí.
+  bitrate:
+    name: Výstupní bitrate (kbps)
+    description: Bitrate MP3 streamu posílaného do LARA, v kbps (např. 128, 192, 320).
+  spotify_bitrate:
+    name: Kvalita Spotify (kbps)
+    description: >-
+      Kvalita streamu ze Spotify Connect (librespot): 96, 160 nebo 320 kbps.
+      Vyžaduje Spotify Premium účet.
+  zone_name:
+    name: Název Spotify zařízení
+    description: >-
+      Jméno, pod kterým se addon objeví v aplikaci Spotify jako Connect zařízení
+      (= název audio zóny). Pustíš do něj hudbu a addon ji přepošle do LARA rádií.
+  fallback_enabled:
+    name: Záložní rádio zapnuté
+    description: >-
+      Zapnuto: po prodlevě nečinnosti Spotify naskočí do streamu záložní online
+      rádio (LARA hraje dál). Vypnuto: po prodlevě ticho a LARA se zastaví.
+  fallback_url:
+    name: URL záložního rádia
+    description: Online rádio, které hraje jako záloha, když Spotify nehraje.
+  fallback_delay:
+    name: Prodleva zálohy (s)
+    description: Sekundy ticha (Spotify nehraje), než naskočí záloha / se LARA zastaví.
+  control_mode:
+    name: Ovládání LARA
+    description: >-
+      slimproto = addon je SlimProto (Squeezebox) server na :3483 a pushuje stream
+      do LARA, když se spustí Spotify (výchozí). off = jen najít LARA rádia a vypsat
+      je do logu, nic nepřepínat (pro testování).
+  lara_username:
+    name: LARA — uživatel
+    description: Přihlašovací jméno k LARA rádiím (výchozí „admin").
+  lara_password:
+    name: LARA — heslo
+    description: Heslo k LARA rádiím (výchozí „elkoep").
+  lara_hosts:
+    name: LARA — ruční IP
+    description: >-
+      Volitelný seznam IP adres LARA rádií pro případ, že je automatické hledání
+      (UDP broadcast) nenajde — např. v jiné podsíti.

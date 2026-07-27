@@ -1,0 +1,52 @@
+configuration:
+  port:
+    name: Port
+    description: >-
+      Port the local Icecast stream listens on (LARA fetches audio from here).
+      The address is http://<HA-IP>:<port>/default.
+  source_password:
+    name: Source password (internal)
+    description: >-
+      Internal Icecast password Liquidsoap uses to publish the stream, and the
+      Icecast admin password. LARA does NOT need it. You can leave the default.
+  bitrate:
+    name: Output bitrate (kbps)
+    description: Bitrate of the MP3 stream sent to LARA, in kbps (e.g. 128, 192, 320).
+  spotify_bitrate:
+    name: Spotify quality (kbps)
+    description: >-
+      Spotify Connect (librespot) streaming quality: 96, 160 or 320 kbps.
+      Requires a Spotify Premium account.
+  zone_name:
+    name: Spotify device name
+    description: >-
+      The name the add-on shows in the Spotify app as a Connect device (= the
+      audio-zone name). Play to it and the add-on pushes the audio to the LARA radios.
+  fallback_enabled:
+    name: Fallback radio enabled
+    description: >-
+      On: the fallback online radio starts after the Spotify idle delay (LARA keeps
+      playing). Off: the stream goes silent after the delay and LARA is stopped.
+  fallback_url:
+    name: Fallback radio URL
+    description: Online radio that plays as a fallback when Spotify is not playing.
+  fallback_delay:
+    name: Fallback delay (s)
+    description: Seconds of silence (Spotify idle) before the fallback / LARA stop.
+  control_mode:
+    name: LARA control
+    description: >-
+      slimproto = the add-on is a SlimProto (Squeezebox) server on :3483 and pushes
+      the stream to LARA when Spotify starts (default). off = only discover LARA
+      radios and log them, never switch (for testing).
+  lara_username:
+    name: LARA username
+    description: Login name for the LARA radios (default "admin").
+  lara_password:
+    name: LARA password
+    description: Password for the LARA radios (default "elkoep").
+  lara_hosts:
+    name: LARA manual IPs
+    description: >-
+      Optional list of LARA IP addresses for when auto-discovery (UDP broadcast)
+      cannot find them — e.g. on a different subnet.
