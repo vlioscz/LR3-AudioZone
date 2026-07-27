@@ -37,7 +37,11 @@ které hraje do všech naráz. Vybereš si v mobilu, kam pustit hudbu, a addon r
 5. Když se Spotify rozehraje, addon pošle dotčeným rádiům `strm-s` → **přepnou se do audio zóny**
    a hrají. Vlastní zařízení rádia má přednost před skupinovým: pustíš-li hudbu do „LARA Koupelna"
    uprostřed skupinového poslechu, koupelna se odpojí a ostatní hrají dál.
-6. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q`, ztlumí výstupy a
+6. **Hlasitost se řídí výhradně na rádiu.** Stream jde vždy v plné úrovni, takže v aplikaci
+   Spotify se posuvník hlasitosti nezobrazí — záměrně, aby nešlo zvuk ztlumit na dvou místech
+   a nikdo pak nevěděl kde. Tlačítka na LAŘE posílají požadavek po CLI a addon na něj odpovídá
+   (bez té odpovědi by byla během přehrávání zóny mrtvá).
+7. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q`, ztlumí výstupy a
    přes port 61695 **vrátí rádio na seznam stanic — zastavené**, aby zóna nezůstala viset na
    displeji a rádio bylo připravené pro toho, kdo k němu přijde.
 
@@ -64,7 +68,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `group_name` | `LARA All` | Název zařízení hrajícího do všech rádií (jen při 2+ rádiích). |
 | `lara_name_prefix` | `true` | Předsadit názvům „LARA " („LARA Kuchyň" vs. „Kuchyň"). |
 | `scan_subnet` | prázdné | Podsíť k prohledání, např. `10.0.0`. Prázdné = ta, ve které je HA. |
-| `zone_volume` | `90` | Výchozí hlasitost zóny, dokud nepohneš posuvníkem ve Spotify. `0` = hlasitost LARY neměnit. |
+| `zone_volume` | `90` | Hlasitost nastavená rádiu při zapnutí zóny. `0` = hlasitost rádia neměnit. |
 | `buffer_seconds` | `1.5` | Kolik sekund si LARA načte, než začne hrát = hlavní zdroj zpoždění. Níž = svižnější, ale hrozí výpadky. |
 | `idle_timeout` | `8` | Sekundy nečinnosti Spotify, než LARA opustí zónu = jak dlouho zóna po zastavení hudby ještě visí na displeji. |
 | `control_mode` | `slimproto` | `slimproto` = řídit LARA. `off` = jen najít a logovat (test). |

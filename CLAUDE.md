@@ -103,13 +103,21 @@ A LARA that dials in on :3483 is **added to the inventory even if the scan never
   discovery, SlimProto, the CLI — is unauthenticated. There is deliberately no option to pick
   a weaker behaviour: the alternatives all left the zone hanging on the display.
 
-**Volume.** librespot runs with `--volume-ctrl fixed`, so the Spotify slider never attenuates the
-stream — a second, invisible volume control is exactly how you get a zone nobody can un-mute.
-The slider position instead arrives via `--onevent` in `/tmp/spotify_volume_default` and the
-controller sends it to the LARA as `audg`. `zone_volume` is only the value used until the slider
-is first moved (`0` = never touch the LARA's volume). ⚠️ The event hook must NOT write volume
-events into `spotify_state_*`: everything outside `ACTIVE_EVENTS` reads as "not playing", so a
-volume nudge mid-song would switch the zone off.
+**Volume lives on the radio, and only there.** One control, by decision — two stages mean the
+sound can be turned down in two places and nobody can tell which.
+- `--volume-ctrl fixed` keeps the stream at full scale. Note what this flag really does: it
+  strips the Connect device of its volume capability, so **no slider appears in the Spotify
+  app at all**. It is not "report volume but don't apply it" — no stock librespot mixer does
+  that, which is why "the Spotify slider drives the LARA's hardware volume" is not buildable.
+- The LARA's volume buttons → `<mac> mixer volume <n>` on the LMS CLI → we answer with `audg`.
+  **This is a request, not a report.** While it plays an audio zone the unit has no local
+  volume path at all; if the server does not answer, its buttons are simply dead. Treating it
+  as read-only state (0.2.1–0.3.1) is exactly how that happened.
+- `zone_volume` is applied once, when the zone switches on (`0` = never touch it), and then
+  stays out of the way so the buttons own it.
+
+⚠️ The event hook must NOT write volume events into `spotify_state_*`: everything outside
+`ACTIVE_EVENTS` reads as "not playing", so a volume nudge mid-song would switch the zone off.
 
 **Latency** is a stack of buffers; keep them in mind before adding another:
 Liquidsoap `input.external` (0.4 s) → mp3 encode → Icecast burst (**0**, `burst-on-connect 0`) →
@@ -213,14 +221,8 @@ back to the station list, verified working. `aude 0 0` was confirmed to only **m
 why the 61695 source switch is unconditional now.
 
 **Left**
-1. **The Spotify volume slider is gone.** `--volume-ctrl fixed` removes the Connect device's
-   volume capability entirely, so this librespot never emits a volume event and
-   `spotify_volume()` / `/tmp/spotify_volume_default` never fire. Accepted as the lesser evil
-   (a slider that silently attenuates the stream is worse), but if the slider is wanted back
-   while the LARA keeps the real volume, it needs a librespot mixer that *reports* volume
-   without applying it — none of the stock ones do.
-2. `zone_volume` scale: we sent `audg` 30, the LARA reported 50 back over the CLI. Calibrate.
-3. Multiple LARAs at once; mount-switch latency.
+1. `zone_volume` scale: we sent `audg` 30, the LARA reported 50 back over the CLI. Calibrate.
+2. Multiple LARAs at once; mount-switch latency.
 
 ## Build / dev conventions
 

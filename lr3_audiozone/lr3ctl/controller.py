@@ -71,23 +71,6 @@ def spotify_active(mount: str) -> bool:
         return False
 
 
-def spotify_volume(mount: str) -> int | None:
-    """The Spotify app's volume slider for this zone, 0-100, or None if never reported.
-
-    librespot runs with `--volume-ctrl fixed` so the slider does NOT attenuate the audio (a
-    hidden second volume control is how you end up with a silent zone nobody can explain).
-    Note that `fixed` also removes the Connect device's volume capability altogether on current
-    librespot builds, so in practice this file never appears and the LARA's own knob rules.
-    Kept because it costs nothing and starts working the day librespot reports volume again.
-    """
-    try:
-        with open(os.path.join(STATE_DIR, f"spotify_volume_{mount}")) as f:
-            raw = int(float(f.read().strip()))
-    except (OSError, ValueError):
-        return None
-    return max(0, min(100, round(raw / 65535 * 100) if raw > 100 else raw))
-
-
 def spotify_track(mount: str) -> tuple[str, str]:
     """(title, artist) of what this zone is playing — written by the librespot event hook.
 
@@ -305,15 +288,19 @@ class Controller:
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
-    def desired_volume(self, mount: str) -> int | None:
-        """Spotify's slider if it ever reported one, else `zone_volume`. None = don't touch."""
-        vol = spotify_volume(mount)
-        if vol is None:
-            vol = self.volume
-        return vol if vol > 0 else None
+    def desired_volume(self) -> int | None:
+        """The level a radio is set to when its zone switches on. None = leave it alone.
 
-    async def apply_volume(self, key: str, mount: str):
-        vol = self.desired_volume(mount)
+        Deliberately NOT tied to the Spotify slider: librespot applies that one in software,
+        so mirroring it into `audg` as well would attenuate twice. Two independent controls,
+        each in charge of one stage — the app's slider on the stream, the LARA's buttons
+        (via the LMS CLI) on the hardware.
+        """
+        return self.volume if self.volume > 0 else None
+
+    async def apply_volume(self, key: str):
+        """Set the starting level once per zone-on; afterwards the LARA's own buttons rule."""
+        vol = self.desired_volume()
         if vol is None or self.applied_volume.get(key) == vol:
             return
         await self.slim.set_volume(key, vol)
@@ -331,7 +318,7 @@ class Controller:
                          "'Audio zone function' is enabled and points at %s", key, self.our_ip)
             return
         self.applied_volume.pop(key, None)
-        await self.apply_volume(key, mount)
+        await self.apply_volume(key)
         self.idle_since.pop(key, None)
         self.target[key] = mount
         rec = self.radios.get(key, {}).get("rec", {})
@@ -381,7 +368,7 @@ class Controller:
             if mount:
                 await self.route(key, mount)
                 if self.target.get(key) == mount:
-                    await self.apply_volume(key, mount)
+                    await self.apply_volume(key)
                     self.update_now_playing(key, mount)
             elif self.target.get(key):
                 started = self.idle_since.setdefault(key, now)

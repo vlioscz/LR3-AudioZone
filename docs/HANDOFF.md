@@ -113,16 +113,25 @@ container; if not, the variable is called something else and the hook needs one 
 Also note `run.sh` no longer starts Liquidsoap — the controller renders `radio.liq.tpl` per zone,
 spawns one Liquidsoap each, restarts any that die, and kills them on SIGTERM.
 
+## 0.3.2 — volume, settled
+
+**The LARA's volume buttons had been dead since 0.2.1.** The unit has no local volume path while
+it plays an audio zone: a press goes out as `<mac> mixer volume <n>` on the LMS CLI and it waits
+for the server to answer with `audg`. 0.2.1 reclassified that message as a read-only report of
+the knob position ("echoing audg back would fight the knob") — which disconnected the knob
+entirely. It is a request. We answer it again, and the buttons work.
+
+**Volume is deliberately one control, on the radio.** `--volume-ctrl fixed` stays, so there is no
+slider in the Spotify app. Worth knowing exactly what that flag does: it strips the Connect
+device of its volume *capability*, it does not merely skip the attenuation — which is why the
+slider vanished in 0.2.1 and why `spotify_volume()` never fired. There is no stock librespot
+mixer that reports volume without applying it, so **"the Spotify slider drives the LARA's
+hardware volume" is not buildable**. The real choices are slider-attenuates-the-stream or no
+slider; no slider is the one that leaves the radio's own buttons meaningful, and that is the
+decision. The Spotify→`audg` forwarding and `spotify_volume()` are gone with it.
+
 **Left**
-1. **The Spotify volume slider disappeared.** `--volume-ctrl fixed` removes the Connect device's
-   volume capability outright, so this librespot emits no volume event at all and
-   `/tmp/spotify_volume_default` is never written — `spotify_volume()` in `controller.py` is
-   dead code on this build (harmless, and it self-heals if a future librespot reports volume).
-   Judged the lesser evil: a slider that silently attenuates the stream while the LARA sits at
-   its own level is worse than no slider. Getting the slider back *and* keeping the LARA in
-   charge would need a mixer that reports volume without applying it; no stock librespot mixer
-   does that.
-2. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
+1. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
    not ours. Calibrate `zone_volume` by ear.
 3. **Multi-radio has only ever run against one LARA** — the zone logic is covered by offline
    tests (device set, precedence, routing, rendering) but a second physical radio has never

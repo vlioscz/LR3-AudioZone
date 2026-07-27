@@ -330,11 +330,12 @@ class LmsCliServer:
                     vol = p.volume + int(val) if val[0] in "+-" else int(val)
                 except ValueError:
                     return tokens
-                # The LARA reports the position of its own volume knob here. Take it as state —
-                # echoing an `audg` straight back would fight the knob (and the CLI notify would
-                # bounce the same value at it again).
-                p.volume = max(0, min(100, vol))
-                log.debug("LARA %s reports volume=%d", p.mac, p.volume)
+                # This is the LARA's volume control, and it is a REQUEST, not a report: the
+                # unit has no local volume path while it plays an audio zone, it tells the
+                # server what it wants and waits for an `audg`. Not answering leaves its
+                # volume buttons dead — which is exactly what happened between 0.2.1 and
+                # 0.3.1, when this was treated as read-only state.
+                await self.slim.set_volume(p.mac, max(0, min(100, vol)))
                 return tokens
             if what == "muting":
                 return self._reply(tokens, 0)

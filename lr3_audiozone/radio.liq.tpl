@@ -15,11 +15,14 @@ settings.init.allow_root.set(true)
 # Držíme ho krátký (0.4/0.8 s); rezervu proti jitteru drží vnitřní buffer librespotu
 # a práh v LAŘE (viz buffer_seconds), ne tenhle FIFO.
 #
-# --volume-ctrl fixed: posuvník hlasitosti ve Spotify NESMÍ škrtit samotný stream.
-# Jinak vznikne skrytý druhý regulátor — ztlumíš v mobilu, LARA je nahlas a nikdo neví proč
-# není nic slyšet. Stream tak jde vždy v plné úrovni a hlasitost řeší výhradně LARA
-# (controller jí posílá audg; hodnotu bere z posuvníku ve Spotify, viz spotify_event.sh).
-# --onevent zapisuje stav do /tmp/spotify_state_<mount> a hlasitost do /tmp/spotify_volume_<mount>.
+# Hlasitost patří JEN rádiu — vědomé rozhodnutí. --volume-ctrl fixed znamená, že stream jde
+# vždy v plné úrovni a posuvník v aplikaci Spotify se vůbec nezobrazí (ten přepínač Connect
+# zařízení schopnost hlasitosti odebere; není to „hlas hlas, ale neaplikuj ho"). Regulace tak
+# zůstává výhradně na LAŘE: její tlačítka nejedou lokálně, ale posílají `mixer volume` na náš
+# LMS CLI a čekají na `audg` — viz lmscli.py. Bez té odpovědi jsou tlačítka mrtvá.
+# Dva nezávislé stupně (posuvník na stream + tlačítka na hardware) by znamenaly, že se dá zvuk
+# ztlumit na dvou místech a nikdo nepozná kde — proto je tu jen jeden.
+# --onevent zapisuje stav do /tmp/spotify_state_<mount> a skladbu do /tmp/spotify_track_<mount>.
 spotify = input.external.rawaudio(
   id="spotify_%%MOUNT%%",
   restart=true, restart_on_error=true,

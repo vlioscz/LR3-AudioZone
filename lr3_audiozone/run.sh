@@ -78,7 +78,10 @@ cat > /etc/lr3/spotify_event.sh <<'EOF'
 M="${LR3_MOUNT:-unknown}"
 case "${PLAYER_EVENT:-}" in
   *volume*)
-    [ -n "${VOLUME:-}" ] && printf '%s' "${VOLUME}" > "/tmp/spotify_volume_${M}"
+    # Hlasitost si aplikuje librespot sám (softwarově), takže tu není co dělat — ale událost
+    # se NESMÍ dostat do stavového souboru: controller bere všechno mimo přehrávací události
+    # jako "Spotify nehraje" a posunutí posuvníku uprostřed skladby by LARU po idle_timeout vyplo.
+    :
     ;;
   *)
     printf '%s' "${PLAYER_EVENT:-}" > "/tmp/spotify_state_${M}"
