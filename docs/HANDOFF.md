@@ -1,224 +1,270 @@
-# LR3-AudioZone — hand-off / continue here
+# LR3-AudioZone — hand-off
 
-Everything a fresh session needs to continue this project. Pair with `CLAUDE.md` (full protocol +
-architecture) and the runnable scripts in `tools/`. Written 2026-07-27 after the first real-LARA test.
+Everything a fresh session (or a fresh machine) needs. Pair with `CLAUDE.md` for the
+architecture and `tools/README.md` for the scripts. State as of **v0.3.3, 2026-08-04**.
 
-## TL;DR — where we are
+This is a *current-state* document, not a changelog — where a decision was reversed, only the
+final answer and the reason are recorded. `git log` has the blow-by-blow.
 
-- **Goal:** turn on Spotify Connect on the phone → the add-on plays it on ELKO EP **LARA** radios by
-  acting as a **Slim server (SlimProto)** and pushing the LARA to fetch our Icecast MP3 mount.
-- **Proven on a real LARA** (fw **3.7.001**, MAC `00:0A:59:F2:23:1C`, CSModel `squeezeslave`):
-  SlimProto **HELO gate PASSED**, LARA advertises **`mp3`**, and a pushed **`strm-s` switched the
-  LARA to its "Audio zóna" source**.
-- **Not yet verified on-device:** the fully **automatic** flow (Spotify-active → discover → push →
-  LARA *audibly* plays, and back to off on pause). The add-on (v0.2.0) is complete and its parts
-  are proven individually; the end-to-end loop needs one more on-device session.
+---
 
-## 0.2.0 — what changed (2026-07-27)
+## 1. What it does, and what is proven
 
-The fallback radio is **gone**. It was the LR3-Stream-era workaround (keep a stream alive so the
-LARA always has something to play); with the Slim path working we drive the LARA directly instead:
+Spotify Connect → audio on ELKO EP **LARA** radios. The add-on scans the LAN, offers **one
+Spotify Connect device per radio** (named after the radio) plus **"LARA All"** when there are two
+or more, and drives the radios by acting as a **Slim server**. When Spotify stops, each radio
+returns to its own station list.
 
-- `radio.liq.tpl` — only Spotify → silence. The silence exists purely so the Icecast mount never
-  dies, because the LARA has to be able to fetch it the instant we send `strm-s`.
-- `slimproto.py` — added LMS-style **power** (`aude 1 1` / `aude 0 0`; a player starts powered
-  **down** at HELO), **STAT parsing** (mode + elapsed, 53-byte struct), `pause()`, `stream_url()`,
-  and `on_disconnect`/`on_state` callbacks.
-- `lmscli.py` — **new**: the LMS CLI server on :9595 (see below).
-- `controller.py` — single mount, idle→off state machine (`idle_timeout`), radios learned from
-  SlimProto connections as well as UDP discovery, LARA button presses routed back from the CLI.
-- options: `fallback_*` removed; added `idle_timeout`, `zone_volume`, `cli_port`, `cli_username`,
-  `cli_password`. (0.2.2 also dropped `lara_off_action` again — see below.)
+**Working on real hardware** (single LARA, fw 3.7.001):
 
-⚠️ Supervisor keeps previously saved options. If the add-on refuses to start after the update
-because of the removed `fallback_*` keys, open its Configuration tab and save it again.
+| | |
+|---|---|
+| Discovery + naming | ✅ TCP sweep finds it, name "LARA Koupelna" read from the device |
+| Spotify → LARA audio | ✅ 60 s continuous, 1.46 MB fetched, zero underruns |
+| Latency | ✅ ~2 s after the buffer work (was ~4.5 s) |
+| Stop → back to station list | ✅ noticed in ~5 s, parked after `idle_timeout` |
+| Track title/artist on the display | ✅ |
+| LMS CLI on :9595 | ✅ the LARA really uses it |
+| Volume | ⚠️ Spotify slider only — the radio has no usable volume control (see §4) |
+| **Multi-radio** | ❓ **never run against two physical radios.** Logic covered by offline tests only |
 
-## Proven vs. left
+---
 
-**Proven**
-- Discovery works (by **TCP scan of 61695** — UDP broadcast is dropped by Windows Firewall; on HA/Linux it's fine).
-- SlimProto HELO + `mp3` codec advertised.
-- The **real** `lr3_audiozone/lr3ctl/slimproto.py` (full handshake `vers`/`setd`/`aude`/`audg` + `strm-t`
-  heartbeat) keeps the LARA connected; a minimal listener drops it after ~17 s.
-- `push_stream` (`strm-s`) makes the LARA switch its source to "Audio zóna".
+## 2. The environment this was built against
 
-**Proven on the device 2026-07-27 (the 0.2.0 session)**
-- **Audio actually plays.** 60 s continuous, `bytes_rx` 1.46 MB, input buffer steady at ~62 KB of
-  the 128 KB the player reports, **zero underruns**. `strm-q` + `aude 0 0` closes the audio
-  connection (`STMf`) and the LARA stays off.
-- **This required `server_ip=0` in `strm-s`.** With an explicit address the LARA sits in `STMc`
-  with `bytes_received=0` — source switches to "Audio zóna", but silence. Probe of 8 variants:
-  `autostart=1, thr=20, ip=ours` failed; the same with `ip=0` fetched within a second. Also
-  `autostart='1'` (not `'3'` — no direct streaming) and `threshold=64` KB (200 exceeded the
-  player's buffer; 20 underran).
-- **The LARA opens the LMS CLI on :9595** — open question #4 answered, it is a real dependency.
-  Verbatim session: `login admin elkoep`, `<mac> artist ?`, `<mac> stop`, `<mac> mixer volume 95`,
-  then `playlist tracks ?` every 5 s. It never sends `listen 1` (polls instead of subscribing).
-  The initial `stop` is state sync — treating it as a button made the controller flap, so
-  `lmscli.HANDSHAKE_GRACE` ignores transport commands for the first 5 s of a session.
-- STAT frames are **51 B** on this fw (no trailing `error_code`).
+| thing | value |
+|---|---|
+| LARA | `10.0.0.98`, MAC `00:0a:59:f2:23:1c`, name "LARA Koupelna", fw **3.7.001**, hw 1 |
+| Home Assistant | `10.0.0.99` (HA Green, arm64) — runs the add-on |
+| Dev laptop | `10.0.0.80` (Wi-Fi) / `10.0.0.25` (Ethernet) |
+| Icecast | TCP **8121** (`port`) |
+| SlimProto | TCP **3483** (fixed) |
+| LMS CLI | TCP **9595** (`cli_port`) |
+| ELKO control + discovery | TCP/UDP **61695** (fixed), auth `admin` / `elkoep` |
 
-Also proven offline (unit-level): `strm` body is 24 B + the embedded HTTP request, STAT parses to
-mode/elapsed, the CLI dispatch answers every implemented command on a single line, and the
-controller state machine handles on/idle/off/resume plus SlimProto-only discovery.
+Repo: <https://github.com/vlioscz/LR3-AudioZone> (public), add-on folder `lr3_audiozone/`.
 
-**Ran on HA, 0.2.1 fixes what it found**
-- The whole loop works: Spotify → LARA plays; disconnect → it notices in ~5 s and stops.
-- **`aude 0 0` only mutes.** The unit stayed lit with a dead audio zone on the display. So after
-  `strm-q` we now always send `select_source(RADIO)` + `stop` over 61695 — it lands on the
-  station list, prepared but not playing. Confirmed working on the device. (Needs
-  `lara_username`/`lara_password`; 61695 is the only authenticated path we use.) **0.2.2 removed
-  the `lara_off_action` option** — every other value left the zone hanging on the display, so
-  the choice was complexity without a use case.
-- **`idle_timeout` is the zone-hangs-on-the-display delay.** It was 20 s and read as a bug
-  ("is some fallback timer still in there?"); it is not, there are no fallback remnants. Default
-  is now 8 s. A track change is not a pause (librespot reports `track_changed`/`playing`), so
-  this only guards a genuine pause.
-- **~4.5 s of lag.** Fixed: Icecast burst 16 KB → 0, Liquidsoap buffer 1.0 → 0.4 s, and the LARA
-  `threshold` is now `buffer_seconds` × bitrate (1.5 s ≈ 36 KB @192 kbps) instead of a fixed
-  64 KB (2.7 s). Expect ~2 s total.
-- **The Spotify slider was a hidden second volume control** — it attenuated the stream while the
-  LARA sat at its own level. Now `--volume-ctrl fixed` + the slider is forwarded as `audg`.
+---
 
-**Answered on HA:** the loop works end to end, latency is acceptable after the buffer work, and
-the switch back to the radio list works.
+## 3. Protocol findings — the expensive ones
 
-## 0.3.0 — multi-radio
+These were all found the hard way against the real device. Changing any of them means
+re-probing, not reasoning.
 
-One Spotify Connect device per LARA (named after the radio), plus "LARA All" when there are two
-or more. Nothing to configure: the add-on scans the LAN at start-up and names the devices from
-what the radios report. See CLAUDE.md "Zones" for the mount/name rules.
+### Discovery: UDP is dead on this firmware, TCP works
 
-**The discovery finding that made it possible:** fw 3.7.001 does **not** answer UDP discovery on
-61695 — verified against the device with broadcast, directed broadcast and unicast, and every
-variant byte 0-4. Nothing comes back. The *same probe over TCP* answers immediately with the full
-record including the user-assigned name ("LARA Koupelna"), and `parse_discovery_reply` eats it
-unchanged. So `discovery.find_radios()` = UDP broadcast (kept, other firmware may answer) +
-explicit `lara_hosts` + a threaded TCP sweep of the /24. The sweep is what actually works, and
-it is the only source of radio names — without it there is nothing to call the Spotify devices.
+fw 3.7.001 **never answers UDP discovery** on 61695. Verified with broadcast, directed
+broadcast *and* unicast, and every variant byte 0–4. Nothing comes back — this is the device,
+not a firewall (an earlier note blaming Windows Firewall was wrong).
 
-Watch out when writing probe helpers: `socket.timeout` is a subclass of `OSError`, so a bare
-`except OSError` around the read loop throws away the reply that already arrived. That bug made
-the sweep return nothing while a hand-written one-shot probe worked.
+The **same probe sent over TCP** answers instantly with the full record, and
+`parse_discovery_reply` eats it unchanged:
 
-**0.3.1 — the LARA's display shows the track.** It polls `current_title ?` and `artist ?` every
-few seconds while playing; those two answers are its two display lines, and we were answering
-both with the zone name. The event hook now also writes `/tmp/spotify_track_<mount>` from
-librespot's `track_changed` (title on line 1, artists joined on line 2) and the controller
-copies it onto the Player. ⚠️ Unverified which env var names this librespot build actually
-exports — the hook tries `NAME`/`TRACK_NAME`/`ITEM_NAME` and `ARTISTS`/`ARTIST`/`ALBUM_ARTISTS`.
-If the display still shows the zone name, check whether `/tmp/spotify_track_*` exists in the
-container; if not, the variable is called something else and the hook needs one more name.
-
-Also note `run.sh` no longer starts Liquidsoap — the controller renders `radio.liq.tpl` per zone,
-spawns one Liquidsoap each, restarts any that die, and kills them on SIGTERM.
-
-## 0.3.3 — volume, actually settled
-
-On the device the LARA's volume buttons turned out to only **mute/unmute** while an audio zone
-plays, and answering their `mixer volume` with `audg` (0.3.2) changed nothing audible — `audg`
-appears to have no effect on this firmware's output at all. There is therefore **no usable
-volume control on the radio**, which settles the question: volume lives in librespot's software
-volume, `--volume-ctrl fixed` is gone, and the Spotify slider is back and is the only control.
-
-`mixer volume`, `mixer muting` and unhandled `mixer` verbs are now logged at **INFO**, so if
-someone wants to give those buttons a real effect, the add-on log shows what they actually send.
-`zone_volume` still emits one `audg` at zone-on; on this firmware that is probably a no-op.
-
-The rest of the 0.3.2 note below is history — kept because it records what was tried.
-
-## 0.3.2 — volume, first attempt
-
-**The LARA's volume buttons had been dead since 0.2.1.** The unit has no local volume path while
-it plays an audio zone: a press goes out as `<mac> mixer volume <n>` on the LMS CLI and it waits
-for the server to answer with `audg`. 0.2.1 reclassified that message as a read-only report of
-the knob position ("echoing audg back would fight the knob") — which disconnected the knob
-entirely. It is a request. We answer it again, and the buttons work.
-
-**Volume is deliberately one control, on the radio.** `--volume-ctrl fixed` stays, so there is no
-slider in the Spotify app. Worth knowing exactly what that flag does: it strips the Connect
-device of its volume *capability*, it does not merely skip the attenuation — which is why the
-slider vanished in 0.2.1 and why `spotify_volume()` never fired. There is no stock librespot
-mixer that reports volume without applying it, so **"the Spotify slider drives the LARA's
-hardware volume" is not buildable**. The real choices are slider-attenuates-the-stream or no
-slider; no slider is the one that leaves the radio's own buttons meaningful, and that is the
-decision. The Spotify→`audg` forwarding and `spotify_volume()` are gone with it.
-
-**Left**
-1. **Volume scale.** We sent `audg` 30, the LARA reported 50 back over the CLI, so its scale is
-   not ours. Calibrate `zone_volume` by ear.
-3. **Multi-radio has only ever run against one LARA** — the zone logic is covered by offline
-   tests (device set, precedence, routing, rendering) but a second physical radio has never
-   been in the room. Worth watching when one appears: CPU with N+1 encoders, whether both
-   radios stay in sync on the group mount, and mount-switch latency when a radio moves between
-   its own zone and the group.
-
-Testing without deploying the add-on:
+```json
+{"ip": "10.0.0.98", "name": "LARA Koupelna", "mac": "00:0a:59:f2:23:1c", "fw": 37001, "hw": 1}
 ```
-python tools/zone_test.py <this-ip> --port 8121 --proxy http://<some-icecast>/mount
+
+So `discovery.find_radios()` = UDP broadcast (kept — other firmware may answer) + explicit
+`lara_hosts` + a threaded **TCP sweep of the /24**. The sweep is the only thing that works here,
+and the only source of the device name the Spotify devices are named after.
+
+⚠️ When writing probe helpers: `socket.timeout` subclasses `OSError`, so a bare `except OSError`
+around the read loop **throws away the reply that already arrived**. That bug made the sweep
+return nothing while a hand-written one-shot probe worked.
+
+### strm-s: `server_ip=0` is the whole ballgame
+
+With an explicit address the LARA switches its source to "Audio zóna" and then sits in `STMc`
+with `bytes_received=0` — zone lit, total silence. That is what made earlier sessions think the
+push had failed. A probe of 8 variants isolated it: `autostart=1, thr=20, ip=ours` → nothing;
+identical but `ip=0` → fetched within a second.
+
+| field | value | why |
+|---|---|---|
+| `server_ip` | **0** | "use the control connection's IP". An explicit address is ignored. Fine for us — Icecast and SlimProto run on the same host. |
+| `autostart` | `'1'` | this fw does not take the direct-streaming variants `'2'`/`'3'` |
+| `threshold` | `buffer_seconds` × bitrate | the player reports a **131072 B** input buffer, so the old fixed 200 KB was unreachable; 20 KB underran within seconds |
+
+### STAT frames are 51 bytes, not 53
+
+This fw omits the trailing `error_code`. `_on_stat` tries the long layout then the short one.
+`elapsed_seconds` is field 11, `elapsed_ms` field 13 — getting that index wrong silently reports
+the output-buffer fullness as the elapsed time.
+
+### The LMS CLI on :9595 is a real dependency
+
+The LARA opens it and uses it. Observed session, verbatim:
+
 ```
-`--proxy` serves the upstream stream from *this* host, which is what the LARA requires (see
-`server_ip=0` above) and logs every audio fetch. Then type `on` / `off` / `vol 40` / `status`.
+login admin elkoep
+<mac> artist ?
+<mac> stop
+<mac> mixer volume 95
+<mac> playlist tracks ?      ← then every 5 s, forever
+```
 
-## Device-side prerequisite (must be set on each LARA)
+- It **never sends `listen 1`** — it polls rather than subscribing, so `LmsCliServer.notify()`
+  is dead weight on this firmware (kept for others).
+- The `stop` right after `login` is **state sync, not a button press**. Acting on it made the
+  controller flap (push → "stop" → power off → next tick pushes again). Hence
+  `lmscli.HANDSHAKE_GRACE` = 5 s.
+- It opens a **new** CLI connection on every reconnect without closing the old one.
+- While playing it also polls `current_title ?` and `artist ?` — **those two answers are its two
+  display lines.** That is how the track title gets on the display.
 
-The LARA must have **"Audio zone function"** enabled and its **slim-server IP = the HA/host IP**.
-Two ways to set it (no way to do it safely over 61695 — a config write there Saves the whole config):
+### Leaving the zone: SlimProto alone only mutes
+
+`strm-q` + `aude 0 0` silences the unit but leaves it lit showing a dead audio zone. So
+`zone_off()` follows up over 61695 with `select_source(RADIO)` + `stop`, which lands it on the
+station list, prepared but not playing. **This is the only authenticated path in the add-on** —
+discovery, SlimProto and the CLI are all unauthenticated; this one needs
+`lara_username`/`lara_password`.
+
+### Other device quirks already handled in code
+
+- **HELO caps offset varies** — caps sit at ~byte 34, not 24. `_on_helo` finds the first long
+  printable run instead of assuming an offset.
+- **`d[10]` in status/stations replies** is `1` on this fw where the reference lib expects `0`;
+  the parsers no longer match on it.
+- **A minimal listener drops the player after ~17 s.** The full handshake
+  (`vers`/`setd`/`aude`/`audg`) **plus** the `strm-t` heartbeat is required to hold the connection.
+- ⚠️ A **config read** over 61695 returns plaintext passwords — never log raw packets. Never
+  blind-write presets either: a write Saves the whole list.
+
+---
+
+## 4. Decisions that should not be re-litigated
+
+**Volume lives in Spotify.** Three attempts; this is the end state.
+- `--volume-ctrl fixed` keeps the stream at full scale but **strips the Connect device of its
+  volume capability**, so the slider vanishes from the app entirely. It is *not* "report volume
+  but don't apply it" — no stock librespot mixer does that.
+- The LARA's own volume buttons only **mute/unmute** while an audio zone plays, and `audg` has
+  no audible effect on this firmware's output. Answering `mixer volume` with `audg` changed
+  nothing. So there is no usable control on the radio to hand volume to.
+- ⇒ librespot's software volume (no flag), slider visible, single control. CLI volume values are
+  recorded as state and logged at INFO in case someone later decodes what those buttons send.
+
+**No fallback radio.** The mount carries Spotify or silence. The silence exists only so the
+Icecast mount never dies — the LARA must be able to fetch it the instant `strm-s` arrives.
+
+**One way to leave the zone.** `lara_off_action` existed briefly with four values; every
+alternative left the zone hanging on the display, so the option was removed.
+
+**The device set is fixed at start-up.** A radio that appears later is driven (it follows the
+group) but gets no Connect device until the add-on restarts. The alternative churns processes.
+
+**`idle_timeout` is the "zone still on the display" delay** (default 8 s), not a leftover
+fallback timer — there are none. A track change is not a pause.
+
+---
+
+## 5. Moving to another machine
+
+Everything needed is in git; the working folder holds nothing else of value.
+
+```bash
+git clone https://github.com/vlioscz/LR3-AudioZone.git
+cd LR3-AudioZone
+```
+
+**Prerequisites for the dev tools** (the add-on itself needs none of this — it builds in Docker):
+- **Python 3.12+**. On the old laptop: `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`.
+  Only the stdlib is needed for `lr3ctl/` and the tests; `pyyaml` is handy for config checks.
+- **Git** and, for release work, the **`gh`** CLI authenticated to the `vlioscz` account.
+
+**Windows Firewall** — the LARA connects *to* you, so inbound must be allowed. Run an
+**Administrator** PowerShell:
+
+```powershell
+New-NetFirewallRule -DisplayName "LR3 SlimProto 3483" -Direction Inbound -Protocol TCP -LocalPort 3483 -Action Allow -Profile Any
+New-NetFirewallRule -DisplayName "LR3 SlimProto UDP 3483" -Direction Inbound -Protocol UDP -LocalPort 3483 -Action Allow -Profile Any
+New-NetFirewallRule -DisplayName "LR3 LMS CLI 9595" -Direction Inbound -Protocol TCP -LocalPort 9595 -Action Allow -Profile Any
+```
+
+Remove later with `Remove-NetFirewallRule -DisplayName "LR3 SlimProto 3483"` (etc.).
+None of this applies on the HA itself — the add-on runs with `host_network: true`.
+
+**Antivirus** occasionally EPERM-blocks rapid PowerShell socket spawns. Prefer the Python tools.
+
+**Line endings**: `.gitattributes` forces LF (the container is Linux). Do not let an editor
+convert `run.sh` or the templates to CRLF.
+
+**Sanity check on the new machine** — with a LARA on the LAN:
+
+```bash
+python lr3_audiozone/lr3ctl/discovery.py     # should print the radio with its name
+python tools/tests/test_controller.py        # offline, no device needed
+python tools/tests/test_lmscli.py            # offline, no device needed
+```
+
+---
+
+## 6. Device-side prerequisite (per LARA, set once)
+
+Each LARA needs **"Audio zone function"** enabled, **slim-server IP = the HA address**, and
+**CLI port = 9595**. Two ways:
+
 - **ELKO Configurator** (Windows app), or
-- the LARA **web UI**: `http://<lara-ip>` (HTTP **Digest** auth, realm "LARA", default `admin`/`elkoep`).
-  It's an SPA ("LARA configurator", `index.html`+`index.js`). Section **"Audio zone function"** =
-  checkbox `controll_bit_az` (config field `audio_zone_enabled`) + IP fields `slim_ip_1..4`
-  (config field `audio_zone_ip`). That section also holds a **CLI port (9595) + username/password**.
-  Set it there and **Save** (its own POST serializes the full config correctly).
-- Use `tools/web_explore.py <lara-ip>` to inspect the web UI / confirm the fields.
+- the LARA **web UI**: `http://<lara-ip>`, HTTP **Digest** auth, realm "LARA", default
+  `admin`/`elkoep`. It is an SPA ("LARA configurator"); the section is **"Audio zone function"** —
+  checkbox `controll_bit_az` (config `audio_zone_enabled`) + IP fields `slim_ip_1..4`
+  (config `audio_zone_ip`), plus the CLI port and credentials. Set it there and **Save**; its own
+  POST serialises the whole config correctly. Do **not** write config over 61695.
+- `python tools/web_explore.py <lara-ip>` inspects the web UI read-only.
 
-## How to test — `tools/`
+A LARA pointed at the wrong host is the single most likely reason "nothing happens" — it was the
+cause once already, after the add-on moved from the laptop to the HA.
 
-Run from the repo root. PowerShell scripts load the XOR mask from `lr3_audiozone/lr3ctl/elkoproto.py`
-via a path relative to the script, so they work wherever the repo lives. See `tools/README.md`.
+---
+
+## 7. Tools
+
+Run from the repo root. See `tools/README.md` for the full table.
 
 | Step | Command |
 |---|---|
-| Find LARAs (firewall-proof) | `tools/scan_tcp.ps1 -Subnet 10.0.0.` |
-| Find LARAs (UDP broadcast) | `tools/discover.ps1`  *(may be firewall-blocked on Windows)* |
-| Read-only control smoke | `tools/control_smoke.ps1 -Ip <lara-ip>`  (fw/hw, status, presets) |
-| SlimProto HELO gate | `tools/slim_listen.ps1`  (listen :3483, log HELO + caps) — point a LARA at this host first |
+| Find LARAs + names (the real path) | `python lr3_audiozone/lr3ctl/discovery.py` |
+| Read-only control smoke | `tools/control_smoke.ps1 -Ip <lara-ip>` |
 | Verify an MP3 stream is live | `python tools/check_stream.py <url>` |
-| Full play test (real slimproto.py) | `python tools/play_test.py <our-ip> <mp3-url>` — runs the real server + pushes `strm-s` |
-| **Full zone test (SlimProto + LMS CLI)** | `python tools/zone_test.py <our-ip>` — the real `slimproto.py` + `lmscli.py`, verbose; type `on`/`off`/`vol 60`/`status` |
+| **Full zone test** (SlimProto + LMS CLI) | `python tools/zone_test.py <this-ip> --port 8121 --proxy http://<icecast>/mount` |
+| Offline regression tests | `python tools/tests/test_controller.py`, `python tools/tests/test_lmscli.py` |
 
-## Windows dev-env notes (same laptop)
+`zone_test.py --proxy` serves an upstream stream from *this* host — which is what the LARA
+requires (see `server_ip=0`) — and logs every audio fetch, so you can tell "it fetched" from
+"it went quiet" without guessing. Interactive: `on` / `off` / `vol 40` / `status` / `quit`.
 
-- **Python 3.12**: `%LOCALAPPDATA%\Programs\Python\Python312\python.exe` (pyyaml installed).
-- **Windows Firewall** blocks inbound by default → to receive SlimProto/discovery you must allow the
-  ports (run an **Administrator** PowerShell):
-  ```
-  New-NetFirewallRule -DisplayName "LR3 SlimProto 3483" -Direction Inbound -Protocol TCP -LocalPort 3483 -Action Allow -Profile Any
-  New-NetFirewallRule -DisplayName "LR3 SlimProto UDP 3483" -Direction Inbound -Protocol UDP -LocalPort 3483 -Action Allow -Profile Any
-  New-NetFirewallRule -DisplayName "LR3 LMS CLI 9595" -Direction Inbound -Protocol TCP -LocalPort 9595 -Action Allow -Profile Any
-  ```
-  (LARA UDP discovery replies come to :61695 — allow UDP 61695 too if you rely on `discover.ps1`.)
-  Clean up later: `Remove-NetFirewallRule -DisplayName "LR3 SlimProto 3483"` (etc.).
-- Antivirus occasionally **EPERM**-blocks rapid PowerShell socket spawns — run scripts via `-File`,
-  prefer the Python tools for sockets.
-- **None** of this applies on the real HA (Linux) — the add-on's own dbus/avahi + host_network handle it.
+Point the LARA at the test machine first, and remember to point it back at the HA afterwards.
 
-## Raw captures (reference)
+---
 
-**HELO** from the LARA (decoded payload text):
-```
-CSModel=squeezeslave,ModelName=LARA,Firmware=3.7.001,wma,mp3,HasDigitalOut=0
-```
-dev_id=12. Caps sit at ~byte 34 of the HELO payload (NOT 24 — `slimproto.py` now finds the printable run).
+## 8. Raw captures (reference)
 
-**TCP test-packet reply** (61695, unauth), decoded: `ff fa fa ff 0e 1e 10 40 01 00 03 00 90 89 01 …`
-→ `d[8..10]=1,0,3` identifies an ELKO device; `fw = d[11]<<16 | d[12]<<8 | d[13] = 37001` (=3.7.001), `hw=d[14]=1`.
-⚠️ In a PowerShell port, cast bytes to `[int]` before `-shl` (a `[byte] -shl 8` truncates to 0). The Python code is fine.
+**HELO** payload text: `CSModel=squeezeslave,ModelName=LARA,Firmware=3.7.001,wma,mp3,HasDigitalOut=0`
+(dev_id 12, caps at ~byte 34).
 
-**Status reply** (61695), decoded head: `… 00 c1 01 01 00 00 55 00 01` → `d[7..10]=0,193,1,1`.
-The reference lib expects `d[10]==0` but this fw returns **1** (payload offsets unchanged) — `elkoproto.py`
-`parse_status_reply`/`parse_stations_reply` no longer match on `d[10]`. Parsed: source=0, station=0, volume=0x55, playing=1.
-```
+**TCP test-packet reply** (61695, unauthenticated), decoded:
+`ff fa fa ff 0e 1e 10 40 01 00 03 00 90 89 01 …` → `d[8..10]=1,0,3` identifies an ELKO device;
+`fw = d[11]<<16 | d[12]<<8 | d[13] = 37001`, `hw = d[14] = 1`.
+⚠️ In a PowerShell port, cast to `[int]` before `-shl` — `[byte] -shl 8` truncates to 0.
 
-Next natural step: get the LARA pointed at the HA (Audio zone function + IP), then `tools/play_test.py`,
-then run the actual add-on with `control_mode: slimproto` and walk the on-device checklist above.
+**Status reply** (61695), decoded head: `… 00 c1 01 01 00 00 55 00 01` → `d[7..10] = 0,193,1,1`;
+parsed source=0, station=0, volume=0x55, playing=1.
+
+**Healthy playback STAT** (`STMt`): `out_buf=4990/5000 in_buf=61896/131072 bytes_rx=262162
+elapsed=8.5` — input buffer parked at the threshold is what "it is streaming fine" looks like.
+
+---
+
+## 9. Open items
+
+1. **Multi-radio on real hardware.** Never tested with two LARAs. Watch: CPU with N+1 MP3
+   encoders on the HA Green, whether two radios stay in sync on the group mount, and the latency
+   when a radio switches between its own zone and the group.
+2. **Volume scale.** We sent `audg` 30 and the LARA reported 50 back over the CLI, so its scale
+   is not ours. Moot while `audg` has no effect, but it is the loose end if that changes.
+3. **What the volume buttons actually send.** Now logged at INFO (`mixer volume`, `mixer muting`,
+   unhandled `mixer` verbs). If someone wants those buttons to work, the log is the evidence.
+4. **librespot metadata variable names** are unverified for this build — the hook tries
+   `NAME`/`TRACK_NAME`/`ITEM_NAME` and `ARTISTS`/`ARTIST`/`ALBUM_ARTISTS`. Titles do appear on the
+   display, so at least one pair matches; if a future librespot changes them, that is where to look.

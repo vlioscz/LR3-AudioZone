@@ -19,6 +19,12 @@ SlimProto/discovery on Windows you must allow the inbound ports (Admin PowerShel
 | `zone_test.py <our-ip>` | **The full zone test.** Runs the real `slimproto.py` (:3483) **and** `lmscli.py` (:9595) with debug logging — shows whether the LARA opens the CLI connection and what it sends. Interactive: `on` / `off` / `vol <0-100>` / `status` / `quit`. |
 | `web_explore.py <ip> [user] [pass]` | Digest-auth crawl of the LARA web UI to locate the "Audio zone function" / slim-server fields (`audio_zone_ip`, `controll_bit_az`, CLI 9595). Read-only. |
 | `_elko.ps1` | Shared ELKO protocol helpers dot-sourced by the PowerShell tools (not run directly). |
+| `tests/test_controller.py` | Offline regression test: zones, device set, precedence, routing, on/off, `.liq` rendering. No device or network needed. |
+| `tests/test_lmscli.py` | Offline regression test: SlimProto frame/STAT layouts and every LMS CLI command we answer. No device or network needed. |
+
+⚠️ `discover.ps1` (UDP) finds nothing on fw 3.7.001 — that firmware does not answer UDP
+discovery at all. Use `python ../lr3_audiozone/lr3ctl/discovery.py`, which sweeps the /24 over
+TCP and is also the only way to read a radio's name.
 
 Typical on-device sequence:
 ```
