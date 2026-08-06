@@ -233,4 +233,6 @@ why the 61695 source switch is unconditional now.
 - Line endings: `.gitattributes` forces **LF** (Linux container). `*.png` binary.
 - Commit only when the user asks; end commit messages with `Co-Authored-By: Claude Opus 4.8`.
   main is the release branch the add-on installs from; push there directly.
-- Bump `version:` in `config.yaml` on each shippable change (currently 0.1.0, scheme 0.x in dev).
+- Bump `version:` in `config.yaml` on each shippable change (currently 0.1.0, scheme 0.x in dev),
+  and add the matching entry to `lr3_audiozone/CHANGELOG.md` (HA shows it in the add-on's
+  Changelog tab and when offering the update). English, one `## <version>` section per release.

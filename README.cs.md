@@ -85,12 +85,13 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 
 ## Stav
 
-- ✅ **Přehrávání ověřeno na reálné LAŘE** (fw 3.7.001): 60 s souvislého zvuku, žádný výpadek,
-  čisté zastavení a vypnutí.
-- ✅ **LARA se opravdu připojuje i na LMS CLI** (:9595) — přihlásí se, dotazuje se, co hraje,
-  a hlásí polohu vlastního knoflíku hlasitosti.
-- 🧪 **v0.2.0** — fallback rádio odstraněno, přidán LMS CLI server a vypínání zóny.
-  Na HA ještě neproběhla celá smyčka „Spotify hraje → LARA hraje → pauza → LARA zhasne";
-  obě její poloviny ale ověřené jsou.
+- ✅ **Celá smyčka ověřena na HA s reálnou LAROU** (fw 3.7.001): Spotify se rozehraje →
+  LARA se přepne do audio zóny a hraje (zpoždění ~2 s); hudbu zastavíš → po `idle_timeout`
+  se LARA vrátí na seznam stanic.
+- ✅ **Na displeji běží hrající skladba** — název a interpret jdou přes LMS CLI (:9595).
+- ✅ **Hlasitost je posuvník ve Spotify** — jediný ovladač. Rádio na tomhle firmwaru žádnou
+  vlastní cestu k hlasitosti nemá: jeho tlačítka během zóny jen ztlumí/obnoví.
+- 🧪 **Zatím nevyzkoušeno:** víc LAR hrajících naráz (multi-radio kód je v 0.3.0)
+  a kalibrace stupnice `zone_volume`.
 - Testovací nástroj bez nasazení add-onu:
   `python tools/zone_test.py <ip-tohoto-stroje> --proxy <url-mp3-streamu>`

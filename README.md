@@ -91,12 +91,13 @@ The SlimProto port is 3483.
 
 ## Status
 
-- ✅ **Playback verified on a real LARA** (fw 3.7.001): 60 s of continuous audio, zero
-  dropouts, a clean stop and power-off.
-- ✅ **The LARA really does connect to the LMS CLI** (:9595) — it logs in, asks what is
-  playing, and reports the position of its own volume knob.
-- 🧪 **v0.2.0** — fallback radio removed, LMS CLI server and zone power-off added.
-  The full loop "Spotify plays → LARA plays → pause → LARA turns off" has not yet run on HA;
-  both of its halves are verified, though.
+- ✅ **The whole loop verified on HA with a real LARA** (fw 3.7.001): Spotify starts playing →
+  the LARA switches into the audio zone and plays (~2 s behind); stop the music → after
+  `idle_timeout` the LARA returns to its station list.
+- ✅ **The display shows the playing track** — title and artist go out over the LMS CLI (:9595).
+- ✅ **Volume is the Spotify slider** — the one control. On this firmware the radio has no
+  usable volume path of its own: its buttons only mute/unmute during zone playback.
+- 🧪 **Not yet exercised:** several LARAs playing at once (the multi-radio code shipped
+  in 0.3.0) and calibration of the `zone_volume` scale.
 - Test tool that needs no add-on deployment:
   `python tools/zone_test.py <this-machine-ip> --proxy <mp3-stream-url>`
