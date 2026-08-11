@@ -45,6 +45,16 @@ LIQ_TEMPLATE = "/etc/lr3/radio.liq.tpl"
 GROUP_MOUNT = "all"        # the "every radio" zone
 FALLBACK_MOUNT = "default"  # used only when no radio could be found at start-up
 ACTIVE_EVENTS = {"playing", "started", "track_changed", "changed", "loading", "preloading"}
+LIBRESPOT_LOG_BURST = 40      # most lines copied out of one librespot log in a single pass
+LIBRESPOT_LOG_CHUNK = 256_000  # most bytes read from one log per pass, so a huge file cannot
+                               # stall the tick loop (and with it the SlimProto heartbeat)
+# Our own `strm-q` makes the LARA report `stop` back over the LMS CLI, seconds later — it polls
+# on a 5 s cycle. That echo is not a button press. Ignore transport stops from a radio we have
+# just stopped ourselves, for longer than the poll interval.
+STOP_ECHO_GRACE = 6.0
+# After an underrun the LARA stops playing but keeps the control connection, so `target` still
+# says "playing" and nothing ever re-pushes. Re-push, but not more often than this.
+REPUSH_COOLDOWN = 15.0
 
 
 def opt(cfg, key, default):
@@ -138,11 +148,14 @@ class Controller:
         self.procs: dict[str, asyncio.subprocess.Process] = {}
         self.target: dict[str, str | None] = {}    # mac -> mount currently pushed
         self.idle_since: dict[str, float] = {}     # mac -> when its zone went idle
+        self._stopped_at: dict[str, float] = {}    # mac -> when WE last sent it a stop
+        self._repushed_at: dict[str, float] = {}   # mac -> when we last recovered an underrun
         self.applied_volume: dict[str, int] = {}   # mac -> volume we last sent
         self.slim: SlimProtoServer | None = None
         self.cli: LmsCliServer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._warned_offline: set[str] = set()
+        self._log_offsets: dict[str, int] = {}     # mount -> bytes of its librespot log copied
 
     # --- inventory -------------------------------------------------------------
     def _add(self, key: str, rec: dict, how: str):
@@ -236,6 +249,48 @@ class Controller:
         except Exception:
             log.exception("could not start Liquidsoap for zone /%s", zone.mount)
 
+    def pump_librespot_logs(self):
+        """Copy librespot's own stderr into the add-on log.
+
+        `radio.liq.tpl` sends it to /tmp/librespot_<mount>.log, and it has to: stdout carries
+        the raw PCM, so nothing may be written there. But that file is invisible from the HA
+        UI, and it is exactly where the answers are when Spotify discovery or the connection
+        to Spotify's backend misbehaves — "Published zeroconf service", "Authenticated as",
+        "Spirc shut down unexpectedly". Diagnosing that used to need shell access to the
+        container, which nobody supporting an add-on remotely has.
+        """
+        for zone in self.zones:
+            path = os.path.join(STATE_DIR, f"librespot_{zone.mount}.log")
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            off = self._log_offsets.get(zone.mount, 0)
+            if size < off:          # the zone was restarted and the file replaced
+                off = 0
+            if size == off:
+                continue
+            try:
+                with open(path, "rb") as f:
+                    f.seek(off)
+                    raw = f.read(LIBRESPOT_LOG_CHUNK)
+            except OSError:
+                continue
+            # Stop at the last complete line and leave the rest for the next pass, so a line
+            # written while we read is not split — and a multi-byte character not torn in half.
+            cut = raw.rfind(b"\n") + 1
+            if not cut:
+                continue
+            self._log_offsets[zone.mount] = off + cut
+            chunk = raw[:cut].decode("utf-8", "replace")
+            lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+            if len(lines) > LIBRESPOT_LOG_BURST:
+                dropped = len(lines) - LIBRESPOT_LOG_BURST
+                lines = lines[-LIBRESPOT_LOG_BURST:]
+                log.info("[librespot %s] (%d earlier lines skipped)", zone.mount, dropped)
+            for line in lines:
+                log.info("[librespot %s] %s", zone.mount, line)
+
     async def supervise_zones(self):
         """Restart a pipeline whose Liquidsoap died — otherwise that device vanishes silently."""
         for zone in self.zones:
@@ -271,6 +326,8 @@ class Controller:
     def on_slim_disconnect(self, player):
         self.target.pop(player.mac, None)
         self.idle_since.pop(player.mac, None)
+        self._stopped_at.pop(player.mac, None)
+        self._repushed_at.pop(player.mac, None)
 
     def on_slim_state(self, player, what: str):
         if self.cli:
@@ -285,6 +342,10 @@ class Controller:
             if mount:
                 await self.route(mac, mount)
         elif verb in ("stop", "power_off"):
+            # Not necessarily a button press: it is also how the radio acknowledges the
+            # `strm-q` we just sent it. `zone_off` filters that out by time, which also
+            # covers the echo landing after the next tick already restarted the zone —
+            # that used to kill music a second or two after the user resumed it.
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
@@ -332,7 +393,24 @@ class Controller:
         which stays lit showing a dead audio zone. So we follow it with a source switch over
         61695 (`select_source(RADIO)` + `stop`), leaving the radio prepared but not playing.
         Spotify is always started from the phone, so there is no reason to keep the zone warm.
+
+        Idempotent on purpose. Our own `strm-q` makes the LARA report `stop` back on the LMS
+        CLI, which lands in `on_cli_command` — so every switch-off used to run twice, parking
+        the radio over 61695 twice.
+
+        The bookkeeping happens **before the first await**: `park_on_radio` is two TCP round
+        trips on :61695 and can take seconds, the CLI runs in its own task, and the echo lands
+        squarely inside that window. Recording it afterwards would leave the guard shut exactly
+        when it is needed.
         """
+        now = time.monotonic()
+        if now - self._stopped_at.get(key, -1e9) < STOP_ECHO_GRACE:
+            log.debug("LARA %s was stopped %.1fs ago — ignoring the repeat (the radio is "
+                      "echoing our own stop back over the CLI)",
+                      key, now - self._stopped_at[key])
+            return
+        self._stopped_at[key] = now
+        self.target[key] = None
         if self.slim:
             await self.slim.stop(key)
             await self.slim.set_power(key, False)
@@ -348,6 +426,26 @@ class Controller:
         self.idle_since.pop(key, None)
         rec = self.radios.get(key, {}).get("rec", {})
         log.info("zone OFF %s (%s)", rec.get("name", key), rec.get("ip", "?"))
+
+    async def recover_if_stalled(self, key: str, mount: str, now: float):
+        """Push the stream again if the radio stopped playing but stayed connected.
+
+        On an underrun the LARA reports `STMu` and stops, without dropping the control
+        connection. Nothing else notices: `target` still names the mount, so `route()` returns
+        early and never pushes again, and the radio stays silent for as long as it keeps the
+        connection open — minutes, in the wild, until it finally reconnects. Since `tick()`
+        treats `target == mount` as "playing", this is the one place that can tell it is not.
+        """
+        p = self.slim.players.get(key) if self.slim else None
+        if p is None or p.mode != "stop":
+            return
+        if now - self._repushed_at.get(key, -1e9) < REPUSH_COOLDOWN:
+            return
+        self._repushed_at[key] = now
+        log.warning("LARA %s stopped playing on its own (underrun?) while /%s is still "
+                    "streaming — pushing it again", key, mount)
+        self.target.pop(key, None)
+        await self.route(key, mount)
 
     def update_now_playing(self, key: str, mount: str):
         """Keep the LARA's display on the current track rather than the zone name."""
@@ -368,6 +466,15 @@ class Controller:
             if mount:
                 await self.route(key, mount)
                 if self.target.get(key) == mount:
+                    # Restart the idle countdown on every playing tick. Without this the
+                    # timestamp set by the first blip stays put — `route()` returns early
+                    # once the radio is already on this mount, so it never reaches the
+                    # `idle_since.pop()` there — and from idle_timeout seconds after that
+                    # blip onwards, a SINGLE idle tick (the gap between two tracks) trips
+                    # the timeout instantly. That is the zone switching off mid-album and
+                    # coming straight back, over and over.
+                    self.idle_since.pop(key, None)
+                    await self.recover_if_stalled(key, mount, now)
                     await self.apply_volume(key)
                     self.update_now_playing(key, mount)
             elif self.target.get(key):
@@ -413,6 +520,10 @@ class Controller:
         try:
             while not stopping.is_set():
                 await self.supervise_zones()
+                try:
+                    self.pump_librespot_logs()
+                except Exception:
+                    log.exception("copying the librespot logs failed")
                 if self.mode == "slimproto":
                     try:
                         await self.tick()

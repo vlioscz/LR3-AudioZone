@@ -148,6 +148,100 @@ async def run():
     assert (c.buffer_kb, c.buffer_seconds, c.idle_timeout) == (36, 1.5, 8)
     print("12) buffer seconds -> KB per bitrate; defaults 1.5 s / 8 s idle")
 
+    # The flap that made music stop mid-album on a customer's three-radio install: a single
+    # non-playing event (librespot reports end_of_track between two tracks) used to switch the
+    # zone off the instant idle_timeout had elapsed since the FIRST such blip of the session,
+    # because nothing ever cleared idle_since while the radio kept playing.
+    # A fake clock, so these cases can play for minutes without sleeping. Everything under
+    # test reads time only through C.time.monotonic().
+    class Clock:
+        t = 10_000.0
+        def monotonic(self): return self.t
+        def advance(self, dt): self.t += dt
+    clk = Clock()
+    real_time = C.time
+    C.time = clk
+
+    ctl = mk({"idle_timeout": 8}, radios=[(A, "Koupelna")])
+    mine = ctl.mount_for(A)
+    events.clear(); active_mounts = {mine}
+    await ctl.tick()
+    assert ctl.target[A] == mine
+    # Play for ten minutes, with a one-tick gap between tracks every 30 s — exactly the shape
+    # that used to switch the zone off from the second gap onwards.
+    for _ in range(20):
+        for _ in range(30):
+            clk.advance(1); await ctl.tick()
+        active_mounts = set(); clk.advance(1); await ctl.tick()   # end_of_track
+        active_mounts = {mine}; clk.advance(1); await ctl.tick()  # next track
+        assert ctl.target[A] == mine, "a gap between two tracks must not switch the zone off"
+    assert not any(e[0] == "stop" for e in events), events
+    print("13) 10 min of playback with a gap every 30 s never switches the zone off")
+
+    events.clear(); active_mounts = set()
+    for _ in range(9):                          # a real pause, past idle_timeout
+        clk.advance(1); await ctl.tick()
+    assert ("stop", A) in events and events.count(("park",)) == 1, events
+    assert ctl.target[A] is None
+    print("14) a real pause past idle_timeout still stops and parks the radio, once")
+
+    # The radio answers our strm-q with `stop` on the CLI seconds later. That is not a button
+    # press, and by then the next tick may already have restarted the zone.
+    events.clear(); clk.advance(2)
+    await ctl.on_cli_command(A, "stop")
+    assert events == [], events
+    active_mounts = {mine}; clk.advance(1); await ctl.tick()
+    assert ctl.target[A] == mine, events
+    events.clear(); clk.advance(1)
+    await ctl.on_cli_command(A, "stop")         # the echo, arriving after the re-push
+    assert events == [], events
+    assert ctl.target[A] == mine, "a late echo of our own stop must not kill the new zone"
+    print("15) the radio echoing our own stop back is ignored, even after the zone restarted")
+
+    # ...but a genuine stop from the radio's buttons, long after ours, must still work.
+    events.clear(); clk.advance(C.STOP_ECHO_GRACE + 1)
+    await ctl.on_cli_command(A, "stop")
+    assert ("stop", A) in events and ("park",) in events, events
+    print("16) a genuine stop pressed on the radio still switches the zone off")
+
+    # An underrun stops playback but keeps the control connection: `target` still says
+    # "playing", so nothing used to re-push and the radio stayed silent for minutes.
+    class P3: mac, ip, name, current_mount, mode = A, "10.0.0.9", "LARA", mine, "play"
+    P3.title = P3.artist = ""
+    p3 = P3(); ctl.slim.players[A] = p3
+    events.clear(); active_mounts = {mine}; clk.advance(1)
+    await ctl.tick()
+    assert ctl.target[A] == mine
+    events.clear(); p3.mode = "stop"            # STMu
+    clk.advance(1); await ctl.tick()
+    assert ("push", A, mine) in events, events
+    events.clear(); clk.advance(1); await ctl.tick()
+    assert events == [], "the re-push must be rate limited, not sent every tick"
+    print("17) an underrun that keeps the connection is noticed and the stream re-pushed")
+
+    C.time = real_time
+
+    # The echo does not politely wait for us to finish: park_on_radio is two TCP round trips
+    # on :61695 and takes seconds, the CLI dispatches in its own task, and the radio answers
+    # right after our strm-q — i.e. squarely inside that window. Real clock here on purpose.
+    class SlowDev:
+        def park_on_radio(self): time.sleep(0.4); events.append(("park",)); return True
+
+    ctl = C.Controller({"idle_timeout": 8})
+    ctl.slim = FakeSlim()
+    ctl.radios[A] = {"rec": {"ip": "10.0.0.9", "name": "Koupelna", "mac": A}, "dev": SlowDev()}
+    ctl.build_zones()
+    mine = ctl.mount_for(A)
+    active_mounts = {mine}
+    await ctl.tick()
+    events.clear(); active_mounts = set()
+    ctl.idle_since[A] = time.monotonic() - 99
+    off = asyncio.create_task(ctl.tick())
+    await asyncio.sleep(0.1)                    # we are now inside park_on_radio
+    await asyncio.gather(off, asyncio.create_task(ctl.on_cli_command(A, "stop")))
+    assert events.count(("park",)) == 1, events
+    print("18) an echo landing while we are still parking does not park the radio twice")
+
 
 asyncio.run(run())
 print("\nALL OK")

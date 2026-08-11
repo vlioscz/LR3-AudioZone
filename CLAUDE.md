@@ -122,6 +122,17 @@ tell which. This took three attempts; the history is here so it is not re-litiga
 ⚠️ The event hook must NOT write volume events into `spotify_state_*`: everything outside
 `ACTIVE_EVENTS` reads as "not playing", so a volume nudge mid-song would switch the zone off.
 
+⚠️ **The idle countdown must be cleared on every playing tick** (`tick()`), not only when a
+radio is pushed to a new mount — `route()` returns early once the radio is already on that
+mount, so it never reaches its own `idle_since.pop()`. Getting this wrong (0.3.0–0.3.3) froze
+the timestamp at the session's first blip, after which one idle tick — the gap between two
+tracks — switched the zone off at once. Symptom: music stops mid-album and resumes seconds
+later; in the log `zone OFF` immediately followed by `zone ON` with the *same* track.
+
+`zone_off()` is **idempotent** (`_parked`): our `strm-q` makes the LARA echo `stop` back on the
+CLI, which is not a button press. Without the guard every switch-off parked the radio twice
+and a late echo could kill a zone that had already restarted.
+
 **Latency** is a stack of buffers; keep them in mind before adding another:
 Liquidsoap `input.external` (0.4 s) → mp3 encode → Icecast burst (**0**, `burst-on-connect 0`) →
 the LARA's own `threshold` (`buffer_seconds` × bitrate, default 1.5 s). That last one dominates —
@@ -223,9 +234,23 @@ volume applied; the CLI handshake `stop` no longer causes a flap. `strm` alone i
 back to the station list, verified working. `aude 0 0` was confirmed to only **mute**, which is
 why the 61695 source switch is unconditional now.
 
+**Done on a customer's 3-radio install (0.3.4)** — multi-radio runs, but its log exposed the
+idle-countdown flap above (76 `zone OFF` against 37 `zone ON` in one log) and two
+`STMu` underruns after which the LARA dropped the SlimProto connection and only came back
+minutes later. The flap is fixed; the underruns are not yet explained.
+
 **Left**
 1. `zone_volume` scale: we sent `audg` 30, the LARA reported 50 back over the CLI. Calibrate.
-2. Multiple LARAs at once; mount-switch latency.
+2. The `STMu` underruns above — whether the flap caused them or CPU/network contention does.
+3. **Spotify visibility.** Because `--cache` keeps credentials, each zone logs in to Spotify's
+   backend and is visible to that one account *from anywhere*, while the rest of the household
+   sees only what mDNS gives them. A logged-in librespot keeps serving zeroconf and accepts
+   `addUser` from **any** account (verified in librespot 0.8.0 source), and a takeover
+   overwrites the stored login — so "remember my login" is not ownership. Planned for 0.4.0:
+   a `spotify_access` switch (`lan_only` default / `remember_login` / `account_only`), splitting
+   `--system-cache` (login) from `--cache` (audio), and a "forget the stored login" checkbox.
+   Blocked on confirming that mDNS actually reaches phones at both installs — if it does not,
+   defaulting to `lan_only` would make every zone disappear.
 
 ## Build / dev conventions
 

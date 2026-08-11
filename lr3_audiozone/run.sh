@@ -99,9 +99,10 @@ esac
 EOF
 chmod +x /etc/lr3/spotify_event.sh
 
-# Vypisuj librespot stderr do logu addonu (kvůli diagnostice).
-# Streamy zakládá controller — jeden per LARA rádio (+ skupinový), podle toho, co najde v síti.
-tail -qF /tmp/librespot_*.log 2>/dev/null | sed -u 's/^/[librespot] /' &
+# librespot stderr se do logu addonu dostává z controlleru (pump_librespot_logs). Dřív tu byl
+# `tail -qF /tmp/librespot_*.log`, jenže ten se spouští dřív, než controller ty soubory založí —
+# maska se nerozvine, tail sleduje název se hvězdičkou a nevypíše nikdy nic. Proto byly chyby
+# librespotu (zeroconf, přihlášení, výpadky spojení) roky neviditelné.
 
 echo "=================================================================="
 echo "  LR3 AudioZone"

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.4
+
+- **Music no longer stops mid-album and start again a few seconds later.** The idle countdown
+  was started by the first non-playing moment of a session and then never restarted, because
+  the code that cleared it only ran when a radio was pushed to a *new* mount. From
+  `idle_timeout` seconds after that first moment onwards, a single one-second gap — the pause
+  between two tracks — switched the zone off instantly, and the next tick switched it back on.
+  On a customer's install this fired dozens of times a day. The countdown now restarts on
+  every tick the zone is playing, so only a real pause of `idle_timeout` seconds ends it.
+- **Switching a zone off no longer happens twice.** Our own `strm-q` makes the LARA report
+  `stop` back over the LMS CLI, which was taken for a button press: the radio was parked on
+  its station list twice, and a late echo could kill a zone that had just started again.
+  Stops coming from a radio we ourselves stopped within the last few seconds are now ignored;
+  a stop genuinely pressed on the radio still works.
+- **An underrun no longer leaves a radio silent for minutes.** When the LARA stops playing but
+  keeps its control connection, nothing noticed — the add-on still believed it was playing and
+  never pushed the stream again, so the radio stayed quiet until it happened to reconnect.
+  It is now detected and the stream is pushed again (at most once every 15 s).
+- **librespot's own log now appears in the add-on log.** It was written to a file inside the
+  container, where nothing outside a shell could see it — and it is where "Published zeroconf
+  service", "Authenticated as …" and connection failures to Spotify are reported, i.e. the
+  answers to why a zone is missing from the Spotify app or keeps dropping out.
+
 ## 0.3.3
 
 - **Volume is back in the Spotify app** — librespot handles it in software again and the
