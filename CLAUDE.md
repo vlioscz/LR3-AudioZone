@@ -103,6 +103,37 @@ A LARA that dials in on :3483 is **added to the inventory even if the scan never
   discovery, SlimProto, the CLI — is unauthenticated. There is deliberately no option to pick
   a weaker behaviour: the alternatives all left the zone hanging on the display.
 
+## Spotify availability (`spotify_remote_access`, 0.3.5)
+
+Spotify Connect reaches a device two ways, and they are independent: **zeroconf/mDNS** on the
+LAN, and **Spotify's own backend** once the device is logged in. librespot logs in by itself
+whenever a cached credentials blob exists — so storing the login silently publishes the zone
+to that one account *worldwide*, which is how an installer ended up seeing a customer's radio
+from mobile data. Facts established from the librespot 0.8.0 source, against earlier folklore:
+
+- Cached credentials do **not** suppress zeroconf. `no_discovery_reason` depends only on the
+  compiled-in backend and `--disable-discovery`; login state never enters it.
+- A logged-in librespot keeps serving the zeroconf pairing endpoint and `handle_add_user`
+  builds credentials straight from the request, with no check against the active or cached
+  user — **any** account on the LAN can take a zone over, and the takeover rewrites the
+  stored blob. So "it remembers my login" is **not** ownership, it is the opposite.
+- A blob can only arrive via a zeroconf `addUser` from the LAN. So `Authenticated as` in a
+  librespot log is proof that mDNS worked at that site for at least one phone.
+- `--disable-credential-cache` sets the credential path to `None` in 0.8.0, so librespot
+  neither writes **nor reads** one: the flag is what actually releases an account. Deleting
+  the file (`purge_stored_logins`, `prepare_credentials`) is belt-and-braces — it keeps an
+  auth blob out of `/data` and every HA backup, and it is the only protection left if that
+  flag is ever unavailable. Delete by **glob, not per zone**: a radio unplugged while the
+  switch is flipped is not in `self.zones` and would keep its login for ever.
+- `probe_cred_cache_flag()` fails **towards passing the flag**. Guessing "unsupported" would
+  silently store logins while the UI promises it does not; guessing "supported" wrongly makes
+  librespot exit at once, which is loud and now visible in the log.
+- Spotify's "Sign out everywhere" explicitly excludes speaker-class devices. It does **not**
+  release a librespot blob; only deleting the file does.
+
+Login and audio cache are deliberately separate dirs (`--system-cache` vs `--cache`) so
+releasing a login does not discard up to 1 GB of audio per zone.
+
 **Volume lives in Spotify** — librespot's software volume, i.e. **no** `--volume-ctrl` flag.
 One control, because two stages mean the sound can be turned down in two places and nobody can
 tell which. This took three attempts; the history is here so it is not re-litigated:
@@ -242,15 +273,10 @@ minutes later. The flap is fixed; the underruns are not yet explained.
 **Left**
 1. `zone_volume` scale: we sent `audg` 30, the LARA reported 50 back over the CLI. Calibrate.
 2. The `STMu` underruns above — whether the flap caused them or CPU/network contention does.
-3. **Spotify visibility.** Because `--cache` keeps credentials, each zone logs in to Spotify's
-   backend and is visible to that one account *from anywhere*, while the rest of the household
-   sees only what mDNS gives them. A logged-in librespot keeps serving zeroconf and accepts
-   `addUser` from **any** account (verified in librespot 0.8.0 source), and a takeover
-   overwrites the stored login — so "remember my login" is not ownership. Planned for 0.4.0:
-   a `spotify_access` switch (`lan_only` default / `remember_login` / `account_only`), splitting
-   `--system-cache` (login) from `--cache` (audio), and a "forget the stored login" checkbox.
-   Blocked on confirming that mDNS actually reaches phones at both installs — if it does not,
-   defaulting to `lan_only` would make every zone disappear.
+3. Whether every phone in a household actually sees a zone over mDNS. Unconfirmed at the
+   1-radio install (its owner was away); at the 3-radio install it is proven indirectly —
+   two of its three zones had a stored login, and a login can only arrive through a zeroconf
+   `addUser` from the LAN, so discovery demonstrably worked there for at least one phone.
 
 ## Build / dev conventions
 

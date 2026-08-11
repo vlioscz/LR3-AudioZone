@@ -65,6 +65,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `source_password` | `changeme` | Interní heslo Icecastu. LARA ho nepotřebuje. |
 | `bitrate` | `192` | Bitrate MP3 posílaného do LARA (kbps). |
 | `spotify_bitrate` | `320` | Kvalita Spotify (96/160/320). |
+| `spotify_remote_access` | `false` | Vypnuto: neukládá se žádné přihlášení ke Spotify, zóny vidí všichni na tvé síti a nikdo mimo ni (vypnutím se dřív uložené přihlášení i smaže). Zapnuto: účet, který zónu vybral jako poslední, zůstane přihlášený a vidí ji odkudkoli. |
 | `zone_name` | `Audio zóna` | Náhradní název — použije se, jen když se nenajde žádné rádio. |
 | `group_name` | `LARA All` | Název zařízení hrajícího do všech rádií (jen při 2+ rádiích). |
 | `lara_name_prefix` | `true` | Předsadit názvům „LARA " („LARA Kuchyň" vs. „Kuchyň"). |

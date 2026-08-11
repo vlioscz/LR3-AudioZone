@@ -17,6 +17,16 @@ configuration:
     description: >-
       Kvalita streamu ze Spotify Connect (librespot): 96, 160 nebo 320 kbps.
       Vyžaduje Spotify Premium účet.
+  spotify_remote_access:
+    name: Přístup ke Spotify zvenčí sítě
+    description: >-
+      VYPNUTO (doporučeno): zóny se nabízejí všem na tvé Wi-Fi a nikomu mimo ni a žádné
+      přihlášení ke Spotify se neukládá. Dřív uložené přihlášení se při startu addonu smaže —
+      tímhle přepínačem tedy zároveň uvolníš účet z téhle krabice, což se hodí poté, co systém
+      někdo nastavoval ze svého telefonu. ZAPNUTO: účet, který jako poslední zónu vybral,
+      zůstane přihlášený, takže ji ten jeden člověk vidí i mimo domov a dá se řídit integrací
+      Spotify v Home Assistantu; ostatní na Wi-Fi ji vidí dál taky. Pozor, ZAPNUTO neznamená
+      vlastnictví — zónu může kdokoli v síti převzít a tím se uložené přihlášení přepíše jeho.
   zone_name:
     name: Náhradní název zařízení
     description: >-

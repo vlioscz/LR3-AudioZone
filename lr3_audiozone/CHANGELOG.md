@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.5
+
+- **New option: "Spotify access from outside the network", off by default.** Until now the
+  add-on stored the Spotify login of whoever first selected a zone, which quietly registered
+  that zone with Spotify's servers: from then on **that one account saw the radio from
+  anywhere in the world**, while the rest of the household only ever saw what local discovery
+  gave them. With the option off, no login is stored, and the zones are offered to everyone
+  on your own network and to nobody outside it.
+- **Turning it off also releases an account that is already stored** — every saved login is
+  deleted when the add-on starts, including those of radios that happen to be switched off at
+  the time. This is the way to hand a system over to its owner after setting it up with your
+  own phone.
+- **Updating changes behaviour**: the option is new, so existing installs get the new default
+  and their stored login is deleted at the first start. Every zone then has to be selected in
+  the Spotify app once more. To keep the old behaviour, turn the option **on** in
+  Configuration before or right after updating.
+- One trade-off worth knowing before you leave it off: if librespot restarts — it does, when
+  the connection to Spotify drops — the zone comes back unclaimed and somebody has to pick it
+  in the app again. With the option on, the stored login let it rejoin by itself.
+- The Spotify login and the cached audio now live in separate directories, so releasing a
+  login no longer throws away up to 1 GB of cached audio per zone.
+- Worth knowing either way: having the login stored is **not** ownership. Anyone on the
+  network can take a zone over, and doing so replaces the stored login with theirs.
+
 ## 0.3.4
 
 - **Music no longer stops mid-album and start again a few seconds later.** The idle countdown

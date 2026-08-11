@@ -22,11 +22,13 @@ control_mode: `slimproto` (default) or `off` (stream only, never touch the radio
 from __future__ import annotations
 
 import asyncio
+import glob
 import json
 import logging
 import os
 import signal
 import socket
+import subprocess
 import sys
 import time
 
@@ -41,6 +43,7 @@ log = logging.getLogger("lr3.ctl")
 
 OPTIONS = "/data/options.json"
 STATE_DIR = "/tmp"
+DATA_DIR = "/data"          # add-on persistent storage; survives restarts and updates
 LIQ_TEMPLATE = "/etc/lr3/radio.liq.tpl"
 GROUP_MOUNT = "all"        # the "every radio" zone
 FALLBACK_MOUNT = "default"  # used only when no radio could be found at start-up
@@ -60,6 +63,25 @@ REPUSH_COOLDOWN = 15.0
 def opt(cfg, key, default):
     v = cfg.get(key, default)
     return default if v is None else v
+
+
+# Container paths, so they are built with "/" rather than os.path.join — these strings also go
+# onto the librespot command line, where a backslash would be nonsense.
+def audio_cache_dir(mount: str) -> str:
+    return f"{DATA_DIR}/librespot_{mount}"
+
+
+def login_cache_dir(mount: str) -> str:
+    return f"{DATA_DIR}/spotify_login/{mount}"
+
+
+def credentials_file(mount: str) -> str:
+    return f"{login_cache_dir(mount)}/credentials.json"
+
+
+def legacy_credentials_file(mount: str) -> str:
+    """Where the login lived up to 0.3.4, mixed in with the audio cache."""
+    return f"{audio_cache_dir(mount)}/credentials.json"
 
 
 def host_ip() -> str:
@@ -127,6 +149,7 @@ class Controller:
         self.port = opt(cfg, "port", 8121)
         self.source_password = opt(cfg, "source_password", "changeme")
         self.spotify_bitrate = opt(cfg, "spotify_bitrate", 320)
+        self.remote_access = bool(opt(cfg, "spotify_remote_access", False))
         self.fallback_name = opt(cfg, "zone_name", "Audio zóna")
         self.group_name = opt(cfg, "group_name", "LARA All")
         self.name_prefix = bool(opt(cfg, "lara_name_prefix", True))
@@ -156,6 +179,7 @@ class Controller:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._warned_offline: set[str] = set()
         self._log_offsets: dict[str, int] = {}     # mount -> bytes of its librespot log copied
+        self.cred_cache_flag_ok = self.probe_cred_cache_flag()
 
     # --- inventory -------------------------------------------------------------
     def _add(self, key: str, rec: dict, how: str):
@@ -226,13 +250,114 @@ class Controller:
                 return z.mount
         return None
 
+    # --- Spotify availability ---------------------------------------------------
+    def librespot_cache_args(self, mount: str) -> str:
+        """The --cache group for one zone, per the spotify_remote_access switch.
+
+        The login and the audio cache live in separate directories on purpose, in both modes,
+        so the layout does not change when the switch is flipped and so releasing a login does
+        not throw away up to 1 GB of cached audio per zone. Paths are quoted: they end up in a
+        `sh -c` line, and an unquoted space would split one argument into two and make
+        librespot exit on a usage error — a zone that is silent for ever.
+        """
+        args = [f'--cache "{audio_cache_dir(mount)}"',
+                "--cache-size-limit 1G",
+                f'--system-cache "{login_cache_dir(mount)}"']
+        if not self.remote_access and self.cred_cache_flag_ok:
+            args.append("--disable-credential-cache")
+        return " ".join(args)
+
+    def purge_stored_logins(self) -> int:
+        """Delete every stored Spotify login under /data, not just this boot's zones.
+
+        Deliberately a glob rather than a loop over `self.zones`: the zone set is rebuilt from
+        whatever discovery finds, so a radio that is unplugged (or renamed, or replaced) while
+        the switch is flipped would keep its login on disk indefinitely — and a Spotify auth
+        blob goes into every HA backup. `<mount>` here is whatever a previous version created.
+        """
+        found = (glob.glob(f"{DATA_DIR}/spotify_login/*/credentials.json")
+                 + glob.glob(f"{DATA_DIR}/librespot_*/credentials.json"))
+        gone = 0
+        for path in found:
+            try:
+                os.remove(path)
+                gone += 1
+            except FileNotFoundError:
+                pass
+            except OSError:
+                log.exception("could not delete the stored Spotify login %s", path)
+        if gone:
+            log.warning("deleted %d stored Spotify login(s) — remote access is off, so no "
+                        "account stays logged in. Select each zone in the Spotify app again.",
+                        gone)
+        return gone
+
+    def prepare_credentials(self, mount: str):
+        """Release or migrate one zone's stored Spotify login before it starts.
+
+        With remote access off the real protection is `--disable-credential-cache`, which in
+        librespot 0.8.0 makes the credential path `None` outright — it neither writes nor
+        reads one. Deleting the file is belt-and-braces: it keeps an auth blob for someone's
+        account out of `/data` (and out of every HA backup), and it is the only protection
+        left in the fallback where that flag turned out to be unavailable.
+        """
+        current, legacy = credentials_file(mount), legacy_credentials_file(mount)
+        if not self.remote_access:
+            for path in (current, legacy):
+                try:
+                    os.remove(path)
+                    log.info("zone /%s: released the stored Spotify login", mount)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    log.exception("zone /%s: could not delete %s", mount, path)
+            return
+        if not os.path.exists(legacy):
+            return
+        if os.path.exists(current):
+            # Both layouts present: the new one wins, the ≤0.3.4 leftover would otherwise sit
+            # in the audio cache for ever.
+            try:
+                os.remove(legacy)
+            except OSError:
+                log.exception("zone /%s: could not remove the superseded login %s",
+                              mount, legacy)
+            return
+        try:
+            os.makedirs(login_cache_dir(mount), exist_ok=True)
+            os.replace(legacy, current)
+            log.info("zone /%s: moved the stored Spotify login to %s", mount, current)
+        except OSError:
+            log.exception("zone /%s: could not move the stored Spotify login", mount)
+
+    @staticmethod
+    def probe_cred_cache_flag() -> bool:
+        """Does this librespot know --disable-credential-cache? (0.4.0 and later do.)
+
+        Fails **safe**, i.e. towards passing the flag: the Dockerfile pins librespot 0.8.0,
+        which has it, so a probe that cannot run at all (librespot not yet on PATH, the
+        timeout firing on a loaded box) says nothing about the binary. Answering "no" there
+        would silently drop the one thing that stops an account being stored, while the UI
+        still promised it — a privacy failure nobody would ever see. Answering "yes" wrongly
+        would instead make librespot exit on an unknown flag, which is loud, immediate, and
+        visible in the log now that librespot's stderr reaches it.
+        """
+        try:
+            out = subprocess.run(["librespot", "--help"], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            log.warning("could not run `librespot --help` to check for "
+                        "--disable-credential-cache; assuming it is supported")
+            return True
+        return b"disable-credential-cache" in out.stdout + out.stderr
+
     # --- audio pipelines -------------------------------------------------------
     def render_liq(self, zone: Zone) -> str:
         with open(LIQ_TEMPLATE, encoding="utf-8") as f:
             tpl = f.read()
         for key, val in (("PORT", self.port), ("SOURCE_PASSWORD", self.source_password),
                          ("BITRATE", self.bitrate), ("SPOTIFY_BITRATE", self.spotify_bitrate),
-                         ("MOUNT", zone.mount), ("ZONE_NAME", zone.name)):
+                         ("MOUNT", zone.mount), ("ZONE_NAME", zone.name),
+                         ("LIBRESPOT_CACHE_ARGS", self.librespot_cache_args(zone.mount))):
             tpl = tpl.replace(f"%%{key}%%", str(val))
         path = os.path.join(STATE_DIR, f"zone_{zone.mount}.liq")
         with open(path, "w", encoding="utf-8") as f:
@@ -240,7 +365,15 @@ class Controller:
         return path
 
     async def start_zone(self, zone: Zone):
-        os.makedirs(f"/data/librespot_{zone.mount}", exist_ok=True)
+        try:
+            os.makedirs(audio_cache_dir(zone.mount), exist_ok=True)
+            os.makedirs(login_cache_dir(zone.mount), exist_ok=True)
+        except OSError:
+            # A full or read-only /data must not take the whole controller down with it —
+            # librespot copes without its caches, and the radios still get driven.
+            log.exception("zone /%s: could not create its cache directories under %s",
+                          zone.mount, DATA_DIR)
+        self.prepare_credentials(zone.mount)
         open(os.path.join(STATE_DIR, f"librespot_{zone.mount}.log"), "a").close()
         path = self.render_liq(zone)
         try:
@@ -496,6 +629,17 @@ class Controller:
         log.info("controller mode=%s our_ip=%s idle_timeout=%ds buffer=%.1fs (%d KB @ %d kbps)",
                  self.mode, self.our_ip, self.idle_timeout, self.buffer_seconds,
                  self.buffer_kb, self.bitrate)
+        if self.remote_access:
+            log.info("Spotify remote access is ON — the last account to select a zone stays "
+                     "logged in and sees it from anywhere, not just on this network")
+        else:
+            log.info("Spotify remote access is OFF — zones are offered to everyone on this "
+                     "network and to nobody outside it; no Spotify login is stored")
+        if not self.remote_access:
+            if not self.cred_cache_flag_ok:
+                log.warning("this librespot does not know --disable-credential-cache, so it "
+                            "may store a login while it runs; it is deleted at every start")
+            self.purge_stored_logins()
         try:
             await asyncio.to_thread(self.discover)
         except Exception:

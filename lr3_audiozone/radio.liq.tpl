@@ -23,11 +23,18 @@ settings.init.allow_root.set(true)
 # audio zóny fungují jen jako mute/unmute a `audg` se na výstupu neprojeví. Regulace na rádiu
 # tedy reálně neexistuje a jediné funkční místo je tady.
 # --onevent zapisuje stav do /tmp/spotify_state_<mount> a skladbu do /tmp/spotify_track_<mount>.
+#
+# %%LIBRESPOT_CACHE_ARGS%% skládá controller podle volby spotify_remote_access. Přihlášení a
+# audio cache jsou schválně ve dvou adresářích (--system-cache vs --cache): uvolnění účtu tak
+# neznamená zahodit až 1 GB audia na zónu. Při vypnutém vzdáleném přístupu se přidá
+# --disable-credential-cache (v 0.8.0 nastaví cestu k přihlášení na None, takže se ani nečte,
+# ani nezapisuje) a controller navíc uložené credentials.json smaže — aby auth blob cizího
+# účtu nezůstal v /data a v zálohách HA.
 spotify = input.external.rawaudio(
   id="spotify_%%MOUNT%%",
   restart=true, restart_on_error=true,
   buffer=0.4, max=0.8, log_overfull=false,
-  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --initial-volume 100 --cache /data/librespot_%%MOUNT%% --cache-size-limit 1G --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
+  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --initial-volume 100 %%LIBRESPOT_CACHE_ARGS%% --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
 )
 
 # --- Ticho, aby byl mount vždy krmený ---

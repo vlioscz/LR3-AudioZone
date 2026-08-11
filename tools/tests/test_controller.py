@@ -242,6 +242,88 @@ async def run():
     assert events.count(("park",)) == 1, events
     print("18) an echo landing while we are still parking does not park the radio twice")
 
+    # --- spotify_remote_access -------------------------------------------------
+    C.DATA_DIR = tempfile.mkdtemp(prefix="lr3data_")
+    C.Controller.probe_cred_cache_flag = staticmethod(lambda: True)
+
+    def stored_login(mount, where="new"):
+        path = (C.credentials_file(mount) if where == "new"
+                else C.legacy_credentials_file(mount))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('{"username": "someone"}')
+        return path
+
+    ctl = mk(radios=[(A, "Koupelna")])          # default: remote access off
+    assert ctl.remote_access is False
+    mine = ctl.mount_for(A)
+    body = open(ctl.render_liq(ctl.zones[0]), encoding="utf-8").read()
+    assert "%%" not in body, [l for l in body.splitlines() if "%%" in l]
+    cmd = next(l for l in body.splitlines() if "librespot --name" in l)
+    assert "--disable-credential-cache" in cmd, cmd
+    assert f'--system-cache "{C.login_cache_dir(mine)}"' in cmd, cmd
+    assert f'--cache "{C.audio_cache_dir(mine)}"' in cmd, cmd
+    print("19) remote access off -> librespot is told not to store the login")
+
+    # A canary in the audio cache: releasing a login must never cost the user up to 1 GB of
+    # cached audio per zone, which is what would happen if the two ever shared a directory.
+    canary = os.path.join(C.audio_cache_dir(mine), "files", "ab", "cd")
+    os.makedirs(canary, exist_ok=True)
+    with open(os.path.join(canary, "track"), "w", encoding="utf-8") as f:
+        f.write("x" * 64)
+    new, old = stored_login(mine), stored_login(mine, "legacy")
+    ctl.prepare_credentials(mine)
+    assert not os.path.exists(new) and not os.path.exists(old), "the login must be deleted"
+    assert os.path.exists(os.path.join(canary, "track")), "the audio cache must survive"
+    print("20) remote access off deletes a login stored earlier, keeping the audio cache")
+
+    # A radio switched off while the switch is flipped is not in this boot's zone set, so a
+    # per-zone loop would leave its login on disk for ever — and in every HA backup.
+    absent = stored_login("lara_deadbe")
+    legacy_absent = stored_login("lara_deadbe", "legacy")
+    ctl = mk(radios=[(A, "Koupelna")])
+    assert ctl.purge_stored_logins() >= 2
+    assert not os.path.exists(absent) and not os.path.exists(legacy_absent)
+    print("21) logins of radios that are switched off right now are released too")
+
+    ctl = mk({"spotify_remote_access": True}, radios=[(A, "Koupelna")])
+    cmd = next(l for l in open(ctl.render_liq(ctl.zones[0]), encoding="utf-8")
+               if "librespot --name" in l)
+    assert "--disable-credential-cache" not in cmd, cmd
+    old = stored_login(mine, "legacy")
+    import shutil
+    shutil.rmtree(C.login_cache_dir(mine), ignore_errors=True)   # prepare must not need it
+    ctl.prepare_credentials(mine)
+    assert os.path.exists(C.credentials_file(mine)), "the 0.3.4 login must be migrated, not lost"
+    assert not os.path.exists(old)
+    stored_login(mine, "legacy")                 # now BOTH exist
+    ctl.prepare_credentials(mine)
+    assert os.path.exists(C.credentials_file(mine))
+    assert not os.path.exists(C.legacy_credentials_file(mine)), "the superseded copy must go"
+    print("22) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
+
+    ctl = mk(radios=[(A, "Koupelna")])           # remote access off
+    ctl.cred_cache_flag_ok = False
+    assert "--disable-credential-cache" not in ctl.librespot_cache_args(mine), \
+        "never pass a flag this librespot does not know — it would exit on start-up"
+    ctl.cred_cache_flag_ok = True
+    assert "--disable-credential-cache" in ctl.librespot_cache_args(mine)
+    for part in (C.audio_cache_dir(mine), C.login_cache_dir(mine)):
+        assert f'"{part}"' in ctl.librespot_cache_args(mine), "paths must be quoted for sh -c"
+    print("23) the flag follows the probe, and the paths are quoted")
+
+    # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
+    # Without this, deleting that one call leaves every other case green.
+    ctl = mk(radios=[(A, "Koupelna")])
+    ctl.render_liq = lambda z: os.path.join(C.STATE_DIR, "unused.liq")
+    left = stored_login(mine)
+    try:
+        await ctl.start_zone(ctl.zones[0])
+    except Exception:
+        pass                                     # liquidsoap is not installed here; fine
+    assert not os.path.exists(left), "start_zone must release the login before spawning"
+    print("24) start_zone releases the stored login before librespot can be started")
+
 
 asyncio.run(run())
 print("\nALL OK")

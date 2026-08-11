@@ -70,6 +70,7 @@ The SlimProto port is 3483.
 | `source_password` | `changeme` | Icecast internal password. The LARA does not need it. |
 | `bitrate` | `192` | Bitrate of the MP3 sent to the LARA (kbps). |
 | `spotify_bitrate` | `320` | Spotify quality (96/160/320). |
+| `spotify_remote_access` | `false` | Off: no Spotify login is stored, zones are visible to everyone on your network and to nobody outside it (turning it off also deletes a login stored earlier). On: the last account to select a zone stays logged in and sees it from anywhere. |
 | `zone_name` | `Audio zóna` | Fallback name — used only when no radio is found. |
 | `group_name` | `LARA All` | Name of the device playing to all radios (only with 2+ radios). |
 | `lara_name_prefix` | `true` | Prefix names with "LARA " ("LARA Kitchen" vs. "Kitchen"). |
