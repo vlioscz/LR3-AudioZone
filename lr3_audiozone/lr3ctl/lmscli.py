@@ -39,9 +39,18 @@ SERVER_VERSION = "7.9.1"
 # commands arriving in the first few seconds of a CLI session are treated as state sync.
 HANDSHAKE_GRACE = 5.0
 
-# The LARA polls this connection every 5 s while it lives. Silence far past that means the
-# socket was abandoned, not idle.
-CLI_SILENCE = 120.0
+# ⚠️ There is deliberately NO idle timeout on a CLI connection.
+#
+# 0.3.6 closed one that had said nothing for 120 s, on the assumption (from CLAUDE.md) that a
+# LARA polls this channel every 5 s for ever. It does not: it polls while it is playing and
+# goes quiet otherwise. The result at a customer's site was 280 connections killed and 283
+# reopened in under four hours — every radio burning a fresh source port every two minutes,
+# which is a slow-motion copy of the very behaviour that preceded a radio freezing solid.
+# A silent CLI connection is a healthy idle one. Leave it alone.
+#
+# What 0.3.6 was actually trying to solve — the radio opening a second connection without
+# closing the first — is handled where it belongs, by closing the superseded one when the
+# replacement arrives (see `_handle`).
 
 _MAC_CHARS = set("0123456789abcdef:")
 _unknown_seen: set[str] = set()
@@ -73,6 +82,7 @@ class LmsCliServer:
         self.on_command = on_command   # async callback(player_mac, verb) for play/stop/power
         self._listeners: set[asyncio.StreamWriter] = set()
         self._session_start: dict[int, float] = {}   # id(writer) -> when this CLI session opened
+        self._by_host: dict[str, asyncio.StreamWriter] = {}   # peer IP -> its live connection
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self):
@@ -82,16 +92,25 @@ class LmsCliServer:
     # --- connection handling ---------------------------------------------------
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info("peername")
+        host = (peer or ("", 0))[0]
         log.info("CLI client connected: %s", peer)
         self._session_start[id(writer)] = time.monotonic()
+        # This firmware opens a fresh CLI connection on every reconnect and never closes the
+        # one it walked away from, so both ends keep an ESTABLISHED socket for a session that
+        # will never speak again. Close the superseded one here — on evidence of replacement,
+        # never on mere silence.
+        previous = self._by_host.get(host)
+        self._by_host[host] = writer
+        if previous is not None and previous is not writer:
+            log.info("CLI client %s reconnected — closing its previous connection", host)
+            self._listeners.discard(previous)
+            try:
+                previous.close()
+            except Exception:
+                pass
         try:
             while True:
-                # The LARA polls this connection every 5 s for as long as it is alive, so a
-                # long silence means it abandoned the socket without closing it — documented
-                # behaviour of this firmware, and it leaves the socket ESTABLISHED at both
-                # ends. Reaping it keeps the count honest and frees one of the very few
-                # sockets the radio has.
-                raw = await asyncio.wait_for(reader.readline(), CLI_SILENCE)
+                raw = await reader.readline()
                 if not raw:
                     break
                 line = raw.decode("utf-8", "replace").strip()
@@ -109,12 +128,11 @@ class LmsCliServer:
                 if reply is not None:
                     writer.write((" ".join(_enc(t) for t in reply) + "\n").encode())
                     await writer.drain()
-        except asyncio.TimeoutError:
-            log.info("CLI client %s sent nothing for %ds — closing the abandoned connection",
-                     peer, CLI_SILENCE)
         except (ConnectionError, OSError):
             pass
         finally:
+            if self._by_host.get(host) is writer:
+                self._by_host.pop(host, None)
             self._listeners.discard(writer)
             self._session_start.pop(id(writer), None)
             log.info("CLI client disconnected: %s", peer)

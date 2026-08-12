@@ -252,9 +252,14 @@ Verified: 60 s continuous play, `bytes_rx` 1.46 MB, `in_buf` steady ~62 KB, zero
   the long layout, then the short one. (`elapsed_seconds` is field 11, `elapsed_ms` field 13.)
 - **The LARA does open the LMS CLI connection on :9595** — confirmed, open question #4 answered.
   Observed session, verbatim: `login admin elkoep` → `<mac> artist ?` → `<mac> stop` →
-  `<mac> mixer volume 95` → then `<mac> playlist tracks ?` **every 5 s** forever. While playing it
-  also polls `artist ?` / `current_title ?`. It **never sends `listen 1`** — this fw polls rather
+  `<mac> mixer volume 95` → then `<mac> playlist tracks ?` **while it is playing**, roughly every
+  5 s, plus `artist ?` / `current_title ?`. It **never sends `listen 1`** — this fw polls rather
   than subscribing, so `LmsCliServer.notify()` is dead weight here (kept for other firmware).
+  - ⚠️ **It goes completely quiet when it is not playing** — "every 5 s forever" was wrong and
+    0.3.6 believed it, closing any connection silent for 120 s. Every radio then reopened one
+    every two minutes (280 closes / 283 opens in 4 h at a customer's site), burning source ports
+    in the same shape as the runaway that preceded a freeze. **Never put an idle timeout on a
+    CLI connection.** Close a connection only when the same host opens a replacement.
   - That `stop` right after login is **state sync, not a button press**. Acting on it made the
     controller flap (push → "stop" → power off → next tick pushes again), hence `HANDSHAKE_GRACE`.
   - `mixer volume <n>` is the LARA reporting its own knob. It is recorded as state; echoing an

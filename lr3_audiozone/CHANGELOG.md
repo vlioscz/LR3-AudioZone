@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.7
+
+- **Fixes a mistake in 0.3.6: idle CLI connections are no longer closed.** 0.3.6 closed any
+  control connection that had said nothing for two minutes, believing the radio polls it every
+  five seconds for ever. It does not — it polls while it is playing and goes quiet otherwise.
+  At a customer's site that meant **280 connections closed and 283 reopened in under four
+  hours**, with every radio taking a fresh network port every two minutes. That is a slower
+  version of the very behaviour seen just before a radio froze solid, so this is worth
+  updating for even though nothing visibly misbehaved.
+- The problem 0.3.6 was aiming at — the radio opening a second control connection and never
+  closing the first — is now handled properly: the old connection is closed when the
+  replacement arrives, never merely because a connection is quiet.
+
+Good news from the same site, on 0.3.6: all three radios stayed connected for four hours with
+no dropouts, the zone stopped switching itself off between tracks (five switch-ons against one
+switch-off, where an earlier log had 37 against 80), and nothing was written to the radios'
+configuration port at all.
+
 ## 0.3.6
 
 Two radios at a customer's site locked up hard enough to need the mains pulled — dead buttons,

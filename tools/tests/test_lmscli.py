@@ -127,6 +127,35 @@ async def run():
         assert await ask(line) is not None
     print("cli: survives having no player connected")
 
+    # A command naming a radio that is not connected must not be executed against a different
+    # one. The old players[0] fallback made one radio's stop land on another; it needs two or
+    # more radios to bite, which is why it only ever showed up on a multi-radio site.
+    fake.players = {MAC: p}
+    assert cli._player("00:0a:59:aa:bb:cc") is None
+    assert cli._player(MAC) is p
+    print("cli: an unknown MAC resolves to nothing, never to another radio")
+
+    # An idle CLI connection is a healthy one. 0.3.6 closed anything silent for 120 s, on the
+    # belief that a LARA polls every 5 s for ever — it does not, it goes quiet when it is not
+    # playing. The result was every radio burning a fresh source port every two minutes, which
+    # is the shape of the behaviour that preceded a radio freezing solid.
+    srv2 = LmsCliServer(FakeSlim(), port=19595, zone_names={}, fallback_name="Z")
+    await srv2.start()
+    r1, w1 = await asyncio.open_connection("127.0.0.1", 19595)
+    await asyncio.sleep(0.4)                       # say nothing at all
+    w1.write(b"version ?\n"); await w1.drain()
+    assert b"version" in await asyncio.wait_for(r1.readline(), 5), "an idle session was reaped"
+
+    # ...but a reconnect from the same host supersedes the old connection, which is what the
+    # firmware actually does: it opens a new one and never closes the one it walked away from.
+    r2, w2 = await asyncio.open_connection("127.0.0.1", 19595)
+    w2.write(b"version ?\n"); await w2.drain()
+    assert b"version" in await asyncio.wait_for(r2.readline(), 5)
+    assert await asyncio.wait_for(r1.read(1), 5) == b"", "the superseded connection stayed open"
+    for w in (w1, w2):
+        w.close()
+    print("cli: idle connections survive; a reconnect closes the one it superseded")
+
 
 asyncio.run(run())
 print("\nALL OK")
