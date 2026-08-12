@@ -339,6 +339,17 @@ async def run():
         assert f'"{part}"' in ctl.librespot_cache_args(mine), "paths must be quoted for sh -c"
     print("25) the flag follows the probe, and the paths are quoted")
 
+    # The audio cache used to be a hard-coded 1 GB per zone, i.e. 4 GB on a four-zone site,
+    # written to the soldered eMMC of an HA Green.
+    assert C.Controller({}).audio_cache_mb == 200
+    args = mk({"audio_cache_mb": 500}, radios=[(A, "K")]).librespot_cache_args(mine)
+    assert "--cache-size-limit 500M" in args and f'--cache "{C.audio_cache_dir(mine)}"' in args
+    off = mk({"audio_cache_mb": 0}, radios=[(A, "K")]).librespot_cache_args(mine)
+    assert "--cache-size-limit" not in off and "--cache " not in off, off
+    assert f'--system-cache "{C.login_cache_dir(mine)}"' in off, \
+        "the login dir must stay even with the audio cache off — it is what the switch clears"
+    print("26) the audio cache is sized by the option, and 0 drops it without losing the rest")
+
     # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
     # Without this, deleting that one call leaves every other case green.
     ctl = mk(radios=[(A, "Koupelna")])
@@ -349,7 +360,7 @@ async def run():
     except Exception:
         pass                                     # liquidsoap is not installed here; fine
     assert not os.path.exists(left), "start_zone must release the login before spawning"
-    print("26) start_zone releases the stored login before librespot can be started")
+    print("27) start_zone releases the stored login before librespot can be started")
 
 
 asyncio.run(run())

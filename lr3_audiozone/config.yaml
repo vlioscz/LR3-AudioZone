@@ -17,6 +17,7 @@ options:
   bitrate: 192
   spotify_bitrate: 320
   spotify_remote_access: false
+  audio_cache_mb: 200
   zone_name: "Audio zóna"
   group_name: "LARA All"
   lara_name_prefix: true
@@ -39,6 +40,7 @@ schema:
   bitrate: int
   spotify_bitrate: list(96|160|320)
   spotify_remote_access: bool
+  audio_cache_mb: int(0,4096)
   zone_name: str
   group_name: str
   lara_name_prefix: bool

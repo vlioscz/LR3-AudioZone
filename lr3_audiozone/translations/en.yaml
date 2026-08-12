@@ -28,6 +28,14 @@ configuration:
       driven by the Home Assistant Spotify integration; everyone else on the Wi-Fi still
       sees it too. Note that ON is not ownership - anyone on the network can take a zone
       over, and doing so replaces the stored login with theirs.
+  audio_cache_mb:
+    name: Spotify audio cache per zone (MB)
+    description: >-
+      How much streamed music each zone keeps on disk. This is per zone, so a house with three
+      radios has four of them. It used to be a fixed 1 GB each; on a Home Assistant Green the
+      storage is soldered in, and every track played is written to it for a cache that only
+      pays off if the same track is played again soon. 0 turns it off entirely - streaming
+      works exactly the same, it just re-fetches.
   zone_name:
     name: Fallback device name
     description: >-

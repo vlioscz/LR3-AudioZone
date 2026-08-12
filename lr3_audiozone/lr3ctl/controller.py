@@ -156,6 +156,11 @@ class Controller:
         self.spotify_bitrate = opt(cfg, "spotify_bitrate", 320)
         self.remote_access = bool(opt(cfg, "spotify_remote_access", False))
         self.park_on_off = bool(opt(cfg, "park_on_zone_off", False))
+        # MB of Spotify audio kept on disk per zone; 0 = none. It used to be a hard-coded 1 GB
+        # *each*, so a four-zone site could put 4 GB of streamed music on the soldered eMMC of
+        # an HA Green — constant writes, for a cache that only pays off when the same track is
+        # replayed soon afterwards.
+        self.audio_cache_mb = max(0, int(opt(cfg, "audio_cache_mb", 200)))
         self.fallback_name = opt(cfg, "zone_name", "Audio zóna")
         self.group_name = opt(cfg, "group_name", "LARA All")
         self.name_prefix = bool(opt(cfg, "lara_name_prefix", True))
@@ -269,9 +274,10 @@ class Controller:
         `sh -c` line, and an unquoted space would split one argument into two and make
         librespot exit on a usage error — a zone that is silent for ever.
         """
-        args = [f'--cache "{audio_cache_dir(mount)}"',
-                "--cache-size-limit 1G",
-                f'--system-cache "{login_cache_dir(mount)}"']
+        args = [f'--system-cache "{login_cache_dir(mount)}"']
+        if self.audio_cache_mb > 0:
+            args += [f'--cache "{audio_cache_dir(mount)}"',
+                     f"--cache-size-limit {self.audio_cache_mb}M"]
         if not self.remote_access and self.cred_cache_flag_ok:
             args.append("--disable-credential-cache")
         return " ".join(args)

@@ -27,6 +27,14 @@ configuration:
       zůstane přihlášený, takže ji ten jeden člověk vidí i mimo domov a dá se řídit integrací
       Spotify v Home Assistantu; ostatní na Wi-Fi ji vidí dál taky. Pozor, ZAPNUTO neznamená
       vlastnictví — zónu může kdokoli v síti převzít a tím se uložené přihlášení přepíše jeho.
+  audio_cache_mb:
+    name: Cache staženého audia na zónu (MB)
+    description: >-
+      Kolik stažené hudby si každá zóna nechává na disku. Je to na každou zónu zvlášť, takže
+      dům se třemi rádii jich má čtyři. Dřív to byl pevný 1 GB na každou; u Home Assistant Green
+      je úložiště připájené a každá přehraná skladba se na něj zapíše kvůli cache, která se
+      vyplatí, jen když se tatáž skladba brzy zopakuje. 0 ji vypne úplně — přehrávání funguje
+      stejně, jen se stahuje znovu.
   zone_name:
     name: Náhradní název zařízení
     description: >-

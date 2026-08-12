@@ -12,6 +12,11 @@
 - The problem 0.3.6 was aiming at — the radio opening a second control connection and never
   closing the first — is now handled properly: the old connection is closed when the
   replacement arrives, never merely because a connection is quiet.
+- **New option: how much Spotify audio each zone caches on disk** (`audio_cache_mb`, default
+  200 MB). It used to be a fixed 1 GB *per zone*, so a house with three radios could put 4 GB
+  of streamed music on the storage of a Home Assistant Green — which is soldered in, and gets
+  written to for every track played, for a cache that only helps if the same track comes round
+  again soon. Set it to 0 to switch it off; playback is unaffected either way.
 
 Good news from the same site, on 0.3.6: all three radios stayed connected for four hours with
 no dropouts, the zone stopped switching itself off between tracks (five switch-ons against one
