@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.6
+
+Two radios at a customer's site locked up hard enough to need the mains pulled — dead buttons,
+dead web page, invisible on the network. The cause is **not identified**. This release removes
+or bounds everything the add-on does that a normal Slim server would not, because that is where
+an untested firmware path is most likely to be.
+
+- **The switch back to the station list over port 61695 is now OFF by default**
+  (`park_on_zone_off`). It is the one thing here that no Logitech server does — a write on the
+  vendor's configuration port, into a unit that is mid-teardown of its audio zone — and it sits
+  inside the sequence before both freezes. With it off, a zone that stops just leaves the audio
+  zone on the display until somebody touches the radio. That is untidy; a frozen radio is a
+  trip to the wall unit.
+- **A radio that is not being driven is never switched off.** A LARA reports `stop` on the CLI
+  as state sync after it connects, and that was taken for a button press: measured on the
+  customer's log, **48 of 82 switch-offs fired on a radio the add-on had never pushed** — and
+  one of those was the last thing ever sent to a unit that then froze.
+- **A CLI command naming an unknown radio no longer executes against a different one.** The
+  lookup fell back to "the first radio in the list", so one radio's stop, play or volume could
+  land on another. It needs two or more radios to bite.
+- **Timestamps on every add-on log line.** Reconstructing the freezes meant inferring the time
+  of each line from the Liquidsoap output around it; the best answer available was a two-hour
+  bracket.
+- **Dead sessions are detected and closed.** A radio answers our 5 s heartbeat, so silence for
+  90 s (SlimProto) or 120 s (CLI) means the socket is abandoned however healthy TCP thinks it
+  is. One such socket stayed open for eight hours against a radio that had frozen, with nothing
+  in the log to say so. This is diagnostics, not a cure — nothing was accumulating.
+- A radio that reconnects now has its previous SlimProto session closed, as real LMS does.
+- **Default buffer raised to 2.7 s (64 KB at 192 kbps)** — the only value ever validated on
+  hardware. 1.5 s shipped since 0.2.1 and was never probed. **Default `idle_timeout` raised to
+  60 s**, so every zone transition — the code path under suspicion — happens far less often.
+  These two are changed defaults, so **existing installations keep their old values**: set them
+  by hand in Configuration.
+
+If your radios have never locked up, `park_on_zone_off` can be turned back on to keep the old
+tidy-up behaviour.
+
 ## 0.3.5
 
 - **New option: "Spotify access from outside the network", off by default.** Until now the

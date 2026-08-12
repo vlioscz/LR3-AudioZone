@@ -38,7 +38,12 @@ import laradev  # noqa: E402
 from lmscli import DEFAULT_CLI_PORT, LmsCliServer  # noqa: E402
 from slimproto import SlimProtoServer  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="[lr3ctl] %(levelname)s %(message)s")
+# Timestamps are not decoration: reconstructing a customer's frozen radio meant inferring the
+# time of every controller line from the Liquidsoap lines around it, which is how a two-hour
+# bracket became the best answer available.
+logging.basicConfig(level=logging.INFO,
+                    format="[lr3ctl] %(asctime)s %(levelname)s %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S")
 log = logging.getLogger("lr3.ctl")
 
 OPTIONS = "/data/options.json"
@@ -150,16 +155,20 @@ class Controller:
         self.source_password = opt(cfg, "source_password", "changeme")
         self.spotify_bitrate = opt(cfg, "spotify_bitrate", 320)
         self.remote_access = bool(opt(cfg, "spotify_remote_access", False))
+        self.park_on_off = bool(opt(cfg, "park_on_zone_off", False))
         self.fallback_name = opt(cfg, "zone_name", "Audio zóna")
         self.group_name = opt(cfg, "group_name", "LARA All")
         self.name_prefix = bool(opt(cfg, "lara_name_prefix", True))
-        self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 8)))
+        self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 60)))
         self.volume = int(opt(cfg, "zone_volume", 90))
         # How much audio the LARA buffers before it starts = the dominant latency in the
         # chain. Expressed in seconds and converted to the KB the strm packet wants, so the
         # delay stays the same whatever the bitrate is.
         self.bitrate = max(32, int(opt(cfg, "bitrate", 192)))
-        self.buffer_seconds = max(0.2, float(opt(cfg, "buffer_seconds", 1.5)))
+        # 2.7 s = 64 KB at 192 kbps, the only threshold ever validated on hardware. 1.5 s
+        # (36 KB) shipped from 0.2.1 to 0.3.5 and was never probed; the probe table in
+        # CLAUDE.md records 20 KB underrunning within seconds.
+        self.buffer_seconds = max(0.2, float(opt(cfg, "buffer_seconds", 2.7)))
         self.buffer_kb = max(8, int(self.bitrate / 8 * self.buffer_seconds))
         self.cli_port = int(opt(cfg, "cli_port", DEFAULT_CLI_PORT))
         self.cli_user = opt(cfg, "cli_username", "")
@@ -479,6 +488,16 @@ class Controller:
             # `strm-q` we just sent it. `zone_off` filters that out by time, which also
             # covers the echo landing after the next tick already restarted the zone —
             # that used to kill music a second or two after the user resumed it.
+            #
+            # And a radio we are not driving has nothing to switch off. Measured on a
+            # customer's log: 48 of 82 switch-offs fired on a radio that had never been
+            # pushed, each one an unsolicited write over 61695 — and one of those was the
+            # last thing the add-on ever sent to a unit that then froze. Whatever wedges
+            # these radios, we have no business poking one we never turned on.
+            if self.target.get(mac) is None:
+                log.info("CLI stop from %s while its zone is off — recorded, nothing to do",
+                         mac)
+                return
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
@@ -523,9 +542,14 @@ class Controller:
         """Spotify is done — stop the stream and put the LARA back on its radio list.
 
         SlimProto alone cannot finish the job: `strm-q` + `aude 0 0` only silences the unit,
-        which stays lit showing a dead audio zone. So we follow it with a source switch over
-        61695 (`select_source(RADIO)` + `stop`), leaving the radio prepared but not playing.
-        Spotify is always started from the phone, so there is no reason to keep the zone warm.
+        which stays lit showing a dead audio zone. A source switch over 61695
+        (`select_source(RADIO)` + `stop`) leaves the radio prepared but not playing instead.
+
+        That switch is **off by default** since 0.3.6 (`park_on_zone_off`). It is the one thing
+        we do that no Slim server does — a write on the vendor's config port, into a unit that
+        is in the middle of an audio-zone teardown — and it sits inside the death sequence of
+        both radios that froze at a customer's site. Leaving the zone on the display is
+        cosmetic; a frozen radio is somebody walking to a wall unit with a screwdriver.
 
         Idempotent on purpose. Our own `strm-q` makes the LARA report `stop` back on the LMS
         CLI, which lands in `on_cli_command` — so every switch-off used to run twice, parking
@@ -547,7 +571,7 @@ class Controller:
         if self.slim:
             await self.slim.stop(key)
             await self.slim.set_power(key, False)
-        dev = self.radios.get(key, {}).get("dev")
+        dev = self.radios.get(key, {}).get("dev") if self.park_on_off else None
         if dev:
             try:
                 if not await asyncio.to_thread(dev.park_on_radio):

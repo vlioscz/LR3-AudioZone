@@ -79,6 +79,7 @@ The SlimProto port is 3483.
 | `buffer_seconds` | `1.5` | How many seconds the LARA buffers before playing = the main source of latency. Lower = snappier, but risks dropouts. |
 | `idle_timeout` | `8` | Seconds of Spotify inactivity before the LARA leaves the zone = how long the zone lingers on the display after the music stops. |
 | `control_mode` | `slimproto` | `slimproto` = control the LARA. `off` = discover and log only (testing). |
+| `park_on_zone_off` | `false` | Off: when the music stops, only the stream is stopped and muted; the radio keeps showing the audio zone until somebody touches it. On: also switch the source back to the station list over port 61695. See the note below before turning it on. |
 | `cli_port` | `9595` | LMS CLI port — must match "CLI port" in the LARA's configuration. |
 | `cli_username` / `cli_password` | empty | Login the LARA sends on the CLI (if it has one). |
 | `lara_username` | `admin` | LARA user — required for the return to the station list (port 61695). |
@@ -89,6 +90,18 @@ The SlimProto port is 3483.
 > are gone. If the add-on complains about unknown options after updating, open its
 > **Configuration** and save it again (the Supervisor keeps previously saved options).
 > `fallback_delay` was replaced by `idle_timeout`.
+
+## ⚠️ Radios locking up (open issue)
+
+At one three-radio site two LARAs froze so hard they needed the mains pulled — buttons dead,
+web page dead, invisible on the network. **The cause is not identified.** 0.3.6 turns off or
+bounds everything the add-on does that a normal Slim server would not; most importantly the
+switch back to the station list over port 61695 (`park_on_zone_off`) is now off by default.
+
+If it happens to you: pull the mains, and **before you do**, try a short press of the RESET pin
+and see whether `http://<radio-ip>` still loads — that answer is worth more than anything else.
+To take the radios completely out of the loop, set `control_mode: off` and un-tick "Audio zone
+function" in each radio's own web UI.
 
 ## Status
 

@@ -74,6 +74,16 @@ configuration:
       slimproto = the add-on is a Slim server (SlimProto :3483 + LMS CLI) and switches
       the LARA into the audio zone whenever Spotify plays (default). off = only discover
       LARA radios and log them, never switch (for testing).
+  park_on_zone_off:
+    name: Return the radio to its station list (port 61695)
+    description: >-
+      OFF (recommended): when the music stops, the add-on only stops and mutes the stream over
+      SlimProto. The radio keeps showing the audio zone until somebody touches it - untidy, but
+      nothing is written to the radio's configuration port. ON: the add-on additionally switches
+      the source back to the station list over port 61695, which needs the LARA username and
+      password. That switch is the one thing this add-on does that no Logitech server does, and
+      it appeared in the sequence before two radios at a customer's site locked up hard enough
+      to need the mains pulled. Leave it off unless you know your radios cope.
   cli_port:
     name: LMS CLI port
     description: >-

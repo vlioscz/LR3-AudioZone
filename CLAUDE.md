@@ -94,14 +94,38 @@ A LARA that dials in on :3483 is **added to the inventory even if the scan never
 
 - Spotify active → `slim.push_stream(mac, "default")`: `aude 1 1` (power on) + `strm-s` to
   `http://<our_ip>:<port>/default` + `audg`.
-- Spotify idle for `idle_timeout` s → `zone_off()`: `strm-q` + `aude 0 0`, then
-  `select_source(RADIO)` + `stop` over 61695 (`laradev.park_on_radio`). SlimProto alone only
-  **mutes** — the unit stays lit showing a dead audio zone, confirmed on hardware. Parking it
-  on the station list is what a person walking up to the radio expects, and Spotify is always
-  started from the phone, so nothing is lost by leaving the zone. This is the **only**
-  authenticated path we use (61695 needs `lara_username`/`lara_password`); everything else —
-  discovery, SlimProto, the CLI — is unauthenticated. There is deliberately no option to pick
-  a weaker behaviour: the alternatives all left the zone hanging on the display.
+- Spotify idle for `idle_timeout` s → `zone_off()`: `strm-q` + `aude 0 0`, and — **only if
+  `park_on_zone_off` is on, which it is not by default since 0.3.6** — `select_source(RADIO)`
+  + `stop` over 61695 (`laradev.park_on_radio`). SlimProto alone only **mutes**, so the unit
+  stays lit showing a dead audio zone; parking it on the station list is what a person walking
+  up to the radio expects. That was the default until 0.3.6 and it is now opt-in, because it
+  is the only thing we do that no Slim server does and it sits inside the sequence before two
+  customer radios froze (see below). 61695 is also the **only** authenticated path we use
+  (`lara_username`/`lara_password`); discovery, SlimProto and the CLI are unauthenticated.
+
+## The freezes (2026-08, unresolved)
+
+At a 3-radio site two LARAs locked up so hard they needed the mains pulled — **buttons dead,
+web UI dead, invisible on every port**, one stuck on the station list and one in the audio
+zone. Never happened in the year before the add-on, during which the **audio-zone function was
+switched off**, i.e. the radio's SlimProto client had never run at all. The mechanism is **not
+identified**. What the evidence does say, from a 1539-line log:
+
+- **Not our socket handling.** One radio held exactly one CLI and one SlimProto socket for 8.5
+  days and stayed healthy; every stale socket in the record was reaped.
+- **Not the 0.3.4 flap fix or anything in it.** Freeze #1 predates 0.3.4; freeze #2 happened
+  **under 0.3.5** with both fixes live. `recover_if_stalled` has never fired.
+- **Not 61695 failing.** Zero failed transactions in 82 parks.
+- **A runaway on the radio itself**: before freeze #1 that unit burned ~640 outbound source
+  ports in two hours (49250 → 49893) against ~50 in the preceding six days. It ends with a
+  device that completes a handshake and instantly drops it — the classic out-of-sockets
+  endgame. Whatever starts that is upstream of what we can see.
+- In both deaths the radio **closed its SlimProto socket** while leaving the **CLI socket
+  ESTABLISHED**. One task went away and the box then wedged — not a clean whole-stack crash.
+
+⚠️ Do **not** "fix" this by adding retries, shortening cooldowns or making recovery more
+aggressive: every extra attempt asks a device that is visibly running out of sockets for
+another one. Do not blind-write anything else over 61695.
 
 ## Spotify availability (`spotify_remote_access`, 0.3.5)
 

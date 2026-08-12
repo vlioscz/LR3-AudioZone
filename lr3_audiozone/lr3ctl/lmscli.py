@@ -39,6 +39,10 @@ SERVER_VERSION = "7.9.1"
 # commands arriving in the first few seconds of a CLI session are treated as state sync.
 HANDSHAKE_GRACE = 5.0
 
+# The LARA polls this connection every 5 s while it lives. Silence far past that means the
+# socket was abandoned, not idle.
+CLI_SILENCE = 120.0
+
 _MAC_CHARS = set("0123456789abcdef:")
 _unknown_seen: set[str] = set()
 
@@ -82,7 +86,12 @@ class LmsCliServer:
         self._session_start[id(writer)] = time.monotonic()
         try:
             while True:
-                raw = await reader.readline()
+                # The LARA polls this connection every 5 s for as long as it is alive, so a
+                # long silence means it abandoned the socket without closing it — documented
+                # behaviour of this firmware, and it leaves the socket ESTABLISHED at both
+                # ends. Reaping it keeps the count honest and frees one of the very few
+                # sockets the radio has.
+                raw = await asyncio.wait_for(reader.readline(), CLI_SILENCE)
                 if not raw:
                     break
                 line = raw.decode("utf-8", "replace").strip()
@@ -100,6 +109,9 @@ class LmsCliServer:
                 if reply is not None:
                     writer.write((" ".join(_enc(t) for t in reply) + "\n").encode())
                     await writer.drain()
+        except asyncio.TimeoutError:
+            log.info("CLI client %s sent nothing for %ds — closing the abandoned connection",
+                     peer, CLI_SILENCE)
         except (ConnectionError, OSError):
             pass
         finally:
@@ -141,10 +153,19 @@ class LmsCliServer:
         return list(self.slim.players.values())
 
     def _player(self, pid: str | None):
+        """The player a command is addressed to, or None.
+
+        A named MAC we do not know resolves to **nothing**, never to "the first radio in the
+        dict". That fallback meant one radio's stop/play/volume could be executed against a
+        different radio entirely — it needs two or more radios to bite, which is the real
+        technical content of the field report that trouble started with the third unit. The
+        callers all handle a missing player; answering structurally is correct and harmless.
+        """
         if pid:
             p = self.slim.players.get(pid.lower())
-            if p:
-                return p
+            if not p:
+                log.info("CLI command addressed to %s, which is not connected — ignored", pid)
+            return p
         players = self._players()
         return players[0] if players else None
 

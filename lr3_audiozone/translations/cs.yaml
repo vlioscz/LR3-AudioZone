@@ -73,6 +73,16 @@ configuration:
       slimproto = addon je Slim server (SlimProto :3483 + LMS CLI) a přepíná LARA
       do audio zóny, když hraje Spotify (výchozí). off = jen najít LARA rádia a
       vypsat je do logu, nic nepřepínat (pro testování).
+  park_on_zone_off:
+    name: Vracet rádio na seznam stanic (port 61695)
+    description: >-
+      VYPNUTO (doporučeno): když hudba skončí, addon jen zastaví a ztlumí stream přes SlimProto.
+      Rádio zůstane ukazovat audio zónu, dokud se ho někdo nedotkne — neupravené, ale nezapisuje
+      se nic do konfiguračního portu rádia. ZAPNUTO: addon navíc přepne zdroj zpět na seznam
+      stanic přes port 61695, k čemuž potřebuje jméno a heslo do LARY. Tenhle přepis je jediná
+      věc, kterou addon dělá a žádný Logitech server ji nedělá — a objevil se v sekvenci předtím,
+      než dvě rádia u zákazníka zatuhla tak, že bylo nutné vytáhnout je ze zásuvky. Nechte
+      vypnuté, dokud si nejste jistí, že to vaše rádia snesou.
   cli_port:
     name: LMS CLI port
     description: >-

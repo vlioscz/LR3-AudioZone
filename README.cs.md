@@ -74,6 +74,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `buffer_seconds` | `1.5` | Kolik sekund si LARA načte, než začne hrát = hlavní zdroj zpoždění. Níž = svižnější, ale hrozí výpadky. |
 | `idle_timeout` | `8` | Sekundy nečinnosti Spotify, než LARA opustí zónu = jak dlouho zóna po zastavení hudby ještě visí na displeji. |
 | `control_mode` | `slimproto` | `slimproto` = řídit LARA. `off` = jen najít a logovat (test). |
+| `park_on_zone_off` | `false` | Vypnuto: po skončení hudby se stream jen zastaví a ztlumí, rádio zůstane ukazovat audio zónu, dokud se ho někdo nedotkne. Zapnuto: navíc přepne zdroj zpět na seznam stanic přes port 61695. Než to zapneš, přečti si poznámku níže. |
 | `cli_port` | `9595` | Port LMS CLI — musí sedět s „CLI port" v konfiguraci LARY. |
 | `cli_username` / `cli_password` | prázdné | Přihlášení, které LARA na CLI posílá (pokud nějaké má). |
 | `lara_username` | `admin` | Uživatel LARA — nutný pro návrat na seznam rádií (port 61695). |
@@ -83,6 +84,17 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 > **Aktualizuješ z 0.1.x?** Volby `fallback_enabled`, `fallback_url` a `fallback_delay` zmizely.
 > Pokud si addon po aktualizaci stěžuje na neznámé volby, otevři jeho **Configuration** a ulož ji
 > znovu (Supervisor si drží dříve uložené volby). `fallback_delay` nahradil `idle_timeout`.
+
+## ⚠️ Zatuhávání rádií (nevyřešeno)
+
+Na jedné instalaci se třemi LARAmi dvě rádia zatuhla tak, že bylo nutné vytáhnout je ze
+zásuvky — mrtvá tlačítka, nedostupná webová stránka, neviditelná na síti. **Příčina není
+známá.** Verze 0.3.6 vypíná nebo omezuje všechno, co addon dělá nad rámec běžného Slim serveru;
+především je nově vypnuté vracení rádia na seznam stanic přes port 61695 (`park_on_zone_off`).
+
+Když se to stane tobě: vytáhni napájení, ale **předtím** zkus krátký stisk RESET a jestli se
+načte `http://<ip-lary>` — tahle odpověď má větší cenu než cokoli jiného. Úplně mimo hru dostaneš
+rádia nastavením `control_mode: off` a vypnutím „Audio zone function" ve webovém rozhraní každé LARY.
 
 ## Stav
 

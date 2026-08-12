@@ -20,6 +20,9 @@ import struct
 log = logging.getLogger("lr3.slim")
 
 SLIMPROTO_PORT = 3483
+# We heartbeat every 5 s and the player answers each one with a STAT, so a session that has
+# said nothing for this long is dead however healthy TCP thinks it is.
+SESSION_SILENCE = 90
 _MP3_CODEC = b"m\x3f\x3f\x3f\x3f"  # 'm' = mp3 + 4 ignored pcm bytes
 
 # STAT payload (player -> server), big-endian, unpadded. Fields:
@@ -107,6 +110,7 @@ class SlimProtoServer:
         self.on_disconnect = on_disconnect  # callback(Player)
         self.on_state = on_state            # callback(Player, what: str) — for the LMS CLI
         self._server: asyncio.AbstractServer | None = None
+        self._tasks: set[asyncio.Task] = set()   # strong refs to the per-player heartbeats
 
     async def start(self):
         self._server = await asyncio.start_server(self._handle, "0.0.0.0", SLIMPROTO_PORT)
@@ -132,7 +136,11 @@ class SlimProtoServer:
         peer = writer.get_extra_info("peername")
         try:
             while True:
-                hdr = await reader.readexactly(8)     # 4-byte op + 4-byte BE length
+                # A live player answers our 5 s heartbeat with a STAT, so silence this long
+                # means the socket is dead even though TCP still calls it ESTABLISHED. One of
+                # these sat open for eight hours against a radio that had frozen, with nothing
+                # in the log to say so.
+                hdr = await asyncio.wait_for(reader.readexactly(8), SESSION_SILENCE)
                 op = hdr[:4]
                 length = struct.unpack("!I", hdr[4:8])[0]
                 data = await reader.readexactly(length) if length else b""
@@ -145,6 +153,10 @@ class SlimProtoServer:
                     break
                 else:
                     log.debug("slim <- %r from %s (%d B)", op, peer, length)
+        except asyncio.TimeoutError:
+            log.warning("LARA %s sent nothing for %ds although it answers our heartbeat every "
+                        "5s — treating the session as dead and closing it",
+                        player.mac if player else peer, SESSION_SILENCE)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         finally:
@@ -169,8 +181,18 @@ class SlimProtoServer:
         # after dev_id+mac instead of assuming a fixed offset.
         m = re.search(rb"[ -~]{8,}", data[8:])
         caps = m.group(0).decode("latin1", "replace") if m else ""
+        old = self.players.get(mac_str)
         player = Player(mac_str, dev_id, caps, writer)
         self.players[mac_str] = player
+        if old is not None and old.writer is not writer:
+            # A second HELO from a MAC we already hold means the radio reconnected without
+            # closing the first socket. Real LMS closes the old one on sight; leaving it open
+            # keeps a socket alive on a device that has very few of them.
+            log.info("LARA %s reconnected — closing its previous session", mac_str)
+            try:
+                old.writer.close()
+            except Exception:
+                pass
         log.info("LARA connected: mac=%s dev=%d caps=%r", mac_str, dev_id, caps)
         # Setup handshake that makes the player ready to emit audio.
         await self._send(player, b"vers", b"7.9")
@@ -180,7 +202,11 @@ class SlimProtoServer:
         # LARA can sit in the audio zone silently "on" from the moment it dials in.
         await self._send(player, b"aude", bytes([0, 0]))
         await self.set_volume(mac_str, player.volume)
-        asyncio.create_task(self._heartbeat(player))
+        # Keep a reference: a bare create_task can be garbage-collected mid-flight, and losing
+        # the heartbeat costs us the connection ~17 s later.
+        task = asyncio.create_task(self._heartbeat(player))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         if self.on_connect:
             try:
                 self.on_connect(player)

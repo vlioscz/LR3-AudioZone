@@ -100,9 +100,10 @@ async def run():
     assert events == [], events
     ctl.idle_since[A] = ctl.idle_since[B] = time.monotonic() - 5
     await ctl.tick()
-    assert ("stop", A) in events and ("park",) in events, events
+    assert ("stop", A) in events, events
     assert ctl.target[A] is None and ctl.target[B] is None
-    print("8) idle past idle_timeout -> stopped and parked back on the radio list")
+    assert ("park",) not in events, "the 61695 park is off by default since 0.3.6"
+    print("8) idle past idle_timeout -> stream stopped, radio left alone by default")
 
     ctl = mk(radios=[(A, "Koupelna"), (B, "Obývák")])
     class P: mac, ip, name = D, "10.0.0.77", "LARA"
@@ -145,8 +146,9 @@ async def run():
     c = C.Controller({"bitrate": 320, "buffer_seconds": 1.5})
     assert c.buffer_kb == 60, c.buffer_kb
     c = C.Controller({})
-    assert (c.buffer_kb, c.buffer_seconds, c.idle_timeout) == (36, 1.5, 8)
-    print("12) buffer seconds -> KB per bitrate; defaults 1.5 s / 8 s idle")
+    # 64 KB @ 192 kbps — the only threshold ever validated on a real LARA.
+    assert (c.buffer_kb, c.buffer_seconds, c.idle_timeout) == (64, 2.7, 60)
+    print("12) buffer seconds -> KB per bitrate; defaults 2.7 s / 60 s idle")
 
     # The flap that made music stop mid-album on a customer's three-radio install: a single
     # non-playing event (librespot reports end_of_track between two tracks) used to switch the
@@ -162,7 +164,8 @@ async def run():
     real_time = C.time
     C.time = clk
 
-    ctl = mk({"idle_timeout": 8}, radios=[(A, "Koupelna")])
+    # park_on_zone_off on, so these cases still exercise the 61695 path end to end.
+    ctl = mk({"idle_timeout": 8, "park_on_zone_off": True}, radios=[(A, "Koupelna")])
     mine = ctl.mount_for(A)
     events.clear(); active_mounts = {mine}
     await ctl.tick()
@@ -227,7 +230,7 @@ async def run():
     class SlowDev:
         def park_on_radio(self): time.sleep(0.4); events.append(("park",)); return True
 
-    ctl = C.Controller({"idle_timeout": 8})
+    ctl = C.Controller({"idle_timeout": 8, "park_on_zone_off": True})
     ctl.slim = FakeSlim()
     ctl.radios[A] = {"rec": {"ip": "10.0.0.9", "name": "Koupelna", "mac": A}, "dev": SlowDev()}
     ctl.build_zones()
@@ -241,6 +244,30 @@ async def run():
     await asyncio.gather(off, asyncio.create_task(ctl.on_cli_command(A, "stop")))
     assert events.count(("park",)) == 1, events
     print("18) an echo landing while we are still parking does not park the radio twice")
+
+    # --- never touch a radio we are not driving (0.3.6) -------------------------
+    # 48 of 82 switch-offs at a customer's site fired on a radio that had never been pushed,
+    # each one an unsolicited write over 61695 — and one of those was the last thing the
+    # add-on ever sent to a unit that then froze solid.
+    ctl = mk({"park_on_zone_off": True}, radios=[(A, "Koupelna"), (B, "Obývák")])
+    events.clear()
+    assert ctl.target.get(A) is None
+    await ctl.on_cli_command(A, "stop")         # the state-sync stop after its CLI handshake
+    assert events == [], events
+    print("19) a stop from a radio we never switched on touches nothing at all")
+
+    # And with the park off — the shipping default — a real switch-off writes nothing to 61695.
+    ctl = mk(radios=[(A, "Koupelna")])
+    assert ctl.park_on_off is False, "the 61695 park must be off by default"
+    mine = ctl.mount_for(A)
+    active_mounts = {mine}
+    await ctl.tick()
+    events.clear(); active_mounts = set()
+    ctl.idle_since[A] = time.monotonic() - 99
+    await ctl.tick()
+    assert ("stop", A) in events and ("power", A, False) in events, events
+    assert ("park",) not in events, "no write to the radio's config port by default"
+    print("20) with the park off, a switch-off is SlimProto only — no 61695 write")
 
     # --- spotify_remote_access -------------------------------------------------
     C.DATA_DIR = tempfile.mkdtemp(prefix="lr3data_")
@@ -263,7 +290,7 @@ async def run():
     assert "--disable-credential-cache" in cmd, cmd
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in cmd, cmd
     assert f'--cache "{C.audio_cache_dir(mine)}"' in cmd, cmd
-    print("19) remote access off -> librespot is told not to store the login")
+    print("21) remote access off -> librespot is told not to store the login")
 
     # A canary in the audio cache: releasing a login must never cost the user up to 1 GB of
     # cached audio per zone, which is what would happen if the two ever shared a directory.
@@ -275,7 +302,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert not os.path.exists(new) and not os.path.exists(old), "the login must be deleted"
     assert os.path.exists(os.path.join(canary, "track")), "the audio cache must survive"
-    print("20) remote access off deletes a login stored earlier, keeping the audio cache")
+    print("22) remote access off deletes a login stored earlier, keeping the audio cache")
 
     # A radio switched off while the switch is flipped is not in this boot's zone set, so a
     # per-zone loop would leave its login on disk for ever — and in every HA backup.
@@ -284,7 +311,7 @@ async def run():
     ctl = mk(radios=[(A, "Koupelna")])
     assert ctl.purge_stored_logins() >= 2
     assert not os.path.exists(absent) and not os.path.exists(legacy_absent)
-    print("21) logins of radios that are switched off right now are released too")
+    print("23) logins of radios that are switched off right now are released too")
 
     ctl = mk({"spotify_remote_access": True}, radios=[(A, "Koupelna")])
     cmd = next(l for l in open(ctl.render_liq(ctl.zones[0]), encoding="utf-8")
@@ -300,7 +327,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert os.path.exists(C.credentials_file(mine))
     assert not os.path.exists(C.legacy_credentials_file(mine)), "the superseded copy must go"
-    print("22) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
+    print("24) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
 
     ctl = mk(radios=[(A, "Koupelna")])           # remote access off
     ctl.cred_cache_flag_ok = False
@@ -310,7 +337,7 @@ async def run():
     assert "--disable-credential-cache" in ctl.librespot_cache_args(mine)
     for part in (C.audio_cache_dir(mine), C.login_cache_dir(mine)):
         assert f'"{part}"' in ctl.librespot_cache_args(mine), "paths must be quoted for sh -c"
-    print("23) the flag follows the probe, and the paths are quoted")
+    print("25) the flag follows the probe, and the paths are quoted")
 
     # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
     # Without this, deleting that one call leaves every other case green.
@@ -322,7 +349,7 @@ async def run():
     except Exception:
         pass                                     # liquidsoap is not installed here; fine
     assert not os.path.exists(left), "start_zone must release the login before spawning"
-    print("24) start_zone releases the stored login before librespot can be started")
+    print("26) start_zone releases the stored login before librespot can be started")
 
 
 asyncio.run(run())
