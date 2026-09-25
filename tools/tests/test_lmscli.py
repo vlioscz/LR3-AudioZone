@@ -49,6 +49,34 @@ assert p.name == "LARA", p.name
 print(f"slimproto: 51-byte STAT parsed -> mode={p.mode} elapsed={p.elapsed}s")
 
 
+# The field report this guards: music stops, yet the phone still shows Spotify streaming to
+# the zone. A LARA whose fetch has stalled goes on reporting `play`, so bytes_received is the
+# only thing that gives it away — and it used to be visible at DEBUG only, on a logger whose
+# level cannot be raised from the add-on options.
+class _Clock:
+    t = 1000.0
+    def monotonic(self): return self.t
+
+
+_clk = _Clock()
+sp.time = _clk
+stall = sp.Player(MAC, 12, "ModelName=LARA,mp3", W())
+stall.mode = "play"
+srv._track_progress(stall, in_buf=62000, bytes_rx=1_000_000)
+assert not stall._stall_logged
+_clk.t += 10; srv._track_progress(stall, in_buf=62000, bytes_rx=1_100_000)
+_clk.t += 20; srv._track_progress(stall, in_buf=61000, bytes_rx=1_100_000)
+assert not stall._stall_logged, "a short coast on the input buffer is normal"
+_clk.t += 25; srv._track_progress(stall, in_buf=400, bytes_rx=1_100_000)
+assert stall._stall_logged, "45 s without a single byte while 'playing' must be reported"
+_clk.t += 5; srv._track_progress(stall, in_buf=62000, bytes_rx=1_200_000)
+assert not stall._stall_logged, "and recovery must be reported too, not left hanging"
+stall.mode = "stop"
+_clk.t += 999; srv._track_progress(stall, in_buf=0, bytes_rx=1_200_000)
+assert not stall._stall_logged, "a radio that is not playing is not stalled"
+print("slimproto: a 'playing' LARA that fetches nothing is detected and logged")
+
+
 class FakeSlim:
     def __init__(self): self.players = {MAC: p}; self.calls = []
     def stream_url(self, m): return f"http://10.0.0.99:8121/{m}"

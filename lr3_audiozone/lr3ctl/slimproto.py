@@ -16,6 +16,7 @@ import asyncio
 import logging
 import re
 import struct
+import time
 
 log = logging.getLogger("lr3.slim")
 
@@ -23,6 +24,12 @@ SLIMPROTO_PORT = 3483
 # We heartbeat every 5 s and the player answers each one with a STAT, so a session that has
 # said nothing for this long is dead however healthy TCP thinks it is.
 SESSION_SILENCE = 90
+# A playing LARA fetches in bursts and can legitimately coast on its input buffer for a few
+# seconds, so only a much longer gap means the audio has actually stopped.
+STALL_AFTER = 30.0
+# One progress line per playing radio at this interval. Sparse on purpose: the HA log ring
+# buffer is the evidence store, and nine days of history only survived because it is sparse.
+PROGRESS_EVERY = 300.0
 _MP3_CODEC = b"m\x3f\x3f\x3f\x3f"  # 'm' = mp3 + 4 ignored pcm bytes
 
 # STAT payload (player -> server), big-endian, unpadded. Fields:
@@ -86,6 +93,17 @@ class Player:
         self.volume = 90
         self.title = ""    # track name, as the LARA's display shows it
         self.artist = ""
+        # Counters the LARA reports in every STAT. They are the only evidence we have that it
+        # is really still pulling audio: a unit whose fetch has stalled keeps saying "play"
+        # and keeps its display lit, so nothing else distinguishes it from one that is fine.
+        self.bytes_rx = 0
+        self.in_buf = 0
+        self._rx_at = 0.0           # when bytes_rx last advanced
+        self._reported_at = 0.0     # when we last wrote a progress line
+        self._stall_logged = False
+        # Counts STAT frames. The controller uses it to tell a radio that has
+        # stalled but is still answering from one that has gone silent for good.
+        self.stat_seq = 0
 
     @property
     def name(self) -> str:
@@ -226,10 +244,54 @@ class SlimProtoServer:
                 log.debug("LARA %s runt STAT %r (%d B)", player.mac, data[:4], len(data))
                 self._apply_event(player, data[:4])
             return
+        player.stat_seq += 1
         player.elapsed = f[13] / 1000.0 if f[13] else float(f[11])
         log.debug("LARA %s STAT %r out_buf=%d/%d in_buf=%d/%d bytes_rx=%d elapsed=%.1f",
                   player.mac, f[0], f[10], f[9], f[5], f[4], f[6], player.elapsed)
+        self._track_progress(player, in_buf=f[5], bytes_rx=f[6])
         self._apply_event(player, f[0])
+
+    def _track_progress(self, player: Player, in_buf: int, bytes_rx: int):
+        """Notice — and say out loud — when a 'playing' LARA has stopped fetching audio.
+
+        Reported from the field: the music stops, yet the phone still shows Spotify streaming
+        to the zone. It would: Spotify Connect ends at librespot, and the LARA sits downstream
+        of that, invisible to the app. Nothing on our side noticed either, because a LARA whose
+        fetch has stalled can go on reporting `play` — only these counters give it away, and
+        they were DEBUG-only, on a logger whose level cannot be raised from the add-on options.
+
+        Detection only. It deliberately does not act: this firmware is already suspected of
+        running itself out of sockets, and asking a struggling unit for another connection is
+        how that gets worse. `recover_if_stalled` still handles the case where it admits it
+        stopped.
+        """
+        now = time.monotonic()
+        player.in_buf = in_buf
+        if bytes_rx != player.bytes_rx:
+            if player._stall_logged:
+                log.warning("LARA %s is fetching audio again after %.0fs of silence",
+                            player.mac, now - player._rx_at)
+                player._stall_logged = False
+            player.bytes_rx = bytes_rx
+            player._rx_at = now
+        elif player._rx_at == 0.0:
+            player._rx_at = now
+
+        if player.mode != "play":
+            player._stall_logged = False
+            player._reported_at = now
+            return
+
+        stalled = now - player._rx_at
+        if stalled >= STALL_AFTER and not player._stall_logged:
+            player._stall_logged = True
+            log.warning("LARA %s says it is playing but has fetched nothing for %.0fs "
+                        "(in_buf=%d B) — the audio has stopped at the radio, not in Spotify",
+                        player.mac, stalled, in_buf)
+        if now - player._reported_at >= PROGRESS_EVERY:
+            player._reported_at = now
+            log.info("LARA %s playing: %.0f s in, %.1f MB fetched, in_buf=%d B",
+                     player.mac, player.elapsed, player.bytes_rx / 1_048_576.0, in_buf)
 
     def _apply_event(self, player: Player, event: bytes):
         mode = _MODE_BY_EVENT.get(event)

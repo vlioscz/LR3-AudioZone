@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.8
+
+A radio at a customer's site stopped playing on a Wednesday evening and was still dead 38 hours
+later, with a black display, until its mains lead was pulled. The add-on log now times that
+precisely, and the picture it gives changes what this release does.
+
+- **A radio that has gone quiet is no longer pushed a fresh stream.** When a LARA runs out of
+  audio it reports an underrun and stops, and since 0.3.4 the add-on has immediately sent it
+  the stream again. That works — 52 times in the month covered by the log. The 53rd time, the
+  underrun was the last thing the radio ever said, and a second later we pushed a new stream
+  into a unit that was already gone. The add-on now waits for the radio to speak again before
+  pushing, so a unit that has fallen silent is simply left alone. The cost is a few seconds
+  more silence when the radio is fine; the gain is that nothing is sent to one that is not.
+- **The log now says when a radio is "playing" but has stopped fetching audio.** This is the
+  reported symptom where the music stops while the phone still shows Spotify streaming to the
+  room — and it would, because Spotify talks to the add-on, not to the radio, and has no idea
+  what the radio is doing. The counters that prove it were previously invisible.
+- A short progress line per playing radio every five minutes: how far in, how much fetched,
+  and how full its buffer is.
+
+**Worth checking your buffer setting.** Underruns are the root of both symptoms, and they are
+frequent: 54 of them in a month at that site, almost all on the one radio that gets daily use.
+It was running a buffer of 2.6 s, just under the 2.7 s that is the only value ever verified on
+real hardware. If a radio of yours cuts out, raise **"How long LARA buffers"** to 4-5 seconds.
+Sound then starts a few seconds later after you press play, and stops dropping out.
+
 ## 0.3.7
 
 - **Fixes a mistake in 0.3.6: idle CLI connections are no longer closed.** 0.3.6 closed any

@@ -187,6 +187,7 @@ class Controller:
         self.idle_since: dict[str, float] = {}     # mac -> when its zone went idle
         self._stopped_at: dict[str, float] = {}    # mac -> when WE last sent it a stop
         self._repushed_at: dict[str, float] = {}   # mac -> when we last recovered an underrun
+        self._stall_seq: dict[str, int] = {}       # mac -> its STAT count when it stalled
         self.applied_volume: dict[str, int] = {}   # mac -> volume we last sent
         self.slim: SlimProtoServer | None = None
         self.cli: LmsCliServer | None = None
@@ -600,13 +601,28 @@ class Controller:
         treats `target == mount` as "playing", this is the one place that can tell it is not.
         """
         p = self.slim.players.get(key) if self.slim else None
-        if p is None or p.mode != "stop":
+        if p is None:
+            return
+        if p.mode != "stop":
+            self._stall_seq.pop(key, None)
             return
         if now - self._repushed_at.get(key, -1e9) < REPUSH_COOLDOWN:
             return
+        # Only push into a radio that is still talking to us. On 2026-09-23 a LARA reported one
+        # underrun and never said another word; we pushed a fresh stream at it one second later
+        # and it stayed dead for 38 hours, until its mains lead was pulled. Whether the push
+        # killed it is unproven — 52 other underruns that month recovered through exactly this
+        # path — but a device whose last word was "I stopped" is the worst possible one to ask
+        # for another connection. So: note where the STAT counter stood when it stalled, and
+        # push only once a later STAT proves it is still alive. Costs a few seconds of silence
+        # in the healthy case; in the fatal one it sends nothing at all.
+        seen = self._stall_seq.setdefault(key, p.stat_seq)
+        if p.stat_seq <= seen:
+            return
+        self._stall_seq.pop(key, None)
         self._repushed_at[key] = now
         log.warning("LARA %s stopped playing on its own (underrun?) while /%s is still "
-                    "streaming — pushing it again", key, mount)
+                    "streaming — it is still answering, so pushing it again", key, mount)
         self.target.pop(key, None)
         await self.route(key, mount)
 

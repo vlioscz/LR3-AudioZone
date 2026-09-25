@@ -123,6 +123,20 @@ identified**. What the evidence does say, from a 1539-line log:
 - In both deaths the radio **closed its SlimProto socket** while leaving the **CLI socket
   ESTABLISHED**. One task went away and the box then wedged — not a clean whole-stack crash.
 
+**Third freeze, 2026-09-23, timed exactly** (the 0.3.6 silence reaper is what caught it):
+Obývák reported `STMu` at 19:43:57 UTC and **never sent another STAT**. One second later
+`recover_if_stalled` pushed it a fresh `strm-s`; at 19:45:27 the 90 s reaper declared the
+session dead. The unit stayed dead for **38 hours**, black display, until its mains lead was
+pulled. Unproven as cause — 52 other underruns that month recovered through that same re-push —
+but since 0.3.8 the re-push requires a **STAT after the underrun**, so a radio whose last word
+was "I stopped" is never pushed again (`Player.stat_seq` vs `Controller._stall_seq`).
+
+⚠️ **Underruns are the thing to fix, not the recovery.** 54 in one month at that site, 52 of
+them on the single radio in daily use, and they are *not* tied to track boundaries or cache
+eviction (33 of 54 are >60 s from either). They are what the customer experiences as "the music
+cuts out and comes back, or stops altogether". That site ran `buffer_seconds` 2.6 (62 KB) —
+under the 64 KB the hardware probe found steady. Raise the buffer before touching anything else.
+
 ⚠️ Do **not** "fix" this by adding retries, shortening cooldowns or making recovery more
 aggressive: every extra attempt asks a device that is visibly running out of sockets for
 another one. Do not blind-write anything else over 61695.
