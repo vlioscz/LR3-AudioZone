@@ -94,8 +94,10 @@ známá.** Verze 0.3.6 vypíná nebo omezuje všechno, co addon dělá nad ráme
 především je nově vypnuté vracení rádia na seznam stanic přes port 61695 (`park_on_zone_off`).
 
 Když se to stane tobě: vytáhni napájení, ale **předtím** zkus krátký stisk RESET a jestli se
-načte `http://<ip-lary>` — tahle odpověď má větší cenu než cokoli jiného. Úplně mimo hru dostaneš
-rádia nastavením `control_mode: off` a vypnutím „Audio zone function" ve webovém rozhraní každé LARY.
+načte `http://<ip-lary>` — tahle odpověď má větší cenu než cokoli jiného. Úplně mimo hru dostaneš rádia
+vypnutím „Audio zone function" ve webovém rozhraní každé LARY. **Nespoléhej na `control_mode: off`** —
+když jsou porty addonu zavřené, rádia se na ně dobývají pořád dokola, což je pro ně horší než
+běžný provoz; používej ho jen krátkodobě při diagnostice.
 **Nezapomeň pak `control_mode` vrátit na `slimproto`** — dokud je `off`, rádia nikdy nehrají
 a jediné, co to prozradí, je varování v logu.
 

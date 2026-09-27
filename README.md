@@ -101,8 +101,10 @@ switch back to the station list over port 61695 (`park_on_zone_off`) is now off 
 
 If it happens to you: pull the mains, and **before you do**, try a short press of the RESET pin
 and see whether `http://<radio-ip>` still loads — that answer is worth more than anything else.
-To take the radios completely out of the loop, set `control_mode: off` and un-tick "Audio zone
-function" in each radio's own web UI.
+To take the radios completely out of the loop, un-tick "Audio zone function" in each radio's
+own web UI. Do **not** rely on `control_mode: off` for this: with the add-on's ports closed the
+radios retry them constantly, which is harder on them than normal operation, so use it only for
+a short diagnostic window.
 **Set `control_mode` back to `slimproto` afterwards** — while it is `off` the radios never
 play, and the only sign of it is a warning in the log.
 

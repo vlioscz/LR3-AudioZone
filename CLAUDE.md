@@ -137,6 +137,14 @@ eviction (33 of 54 are >60 s from either). They are what the customer experience
 cuts out and comes back, or stops altogether". That site ran `buffer_seconds` 2.6 (62 KB) —
 under the 64 KB the hardware probe found steady. Raise the buffer before touching anything else.
 
+⚠️ **`control_mode: off` is NOT a safe parking state**, despite having been recommended as one.
+With the servers down the radios keep dialling :3483 and :9595 and get connection refused, and
+this firmware has no reconnect backoff — each refused attempt burns an outbound source port.
+Measured at site 5 over ~47 h in that mode: Obývák went 49154 → 51290, **~40 ports/hour**
+against a normal-operation baseline of ~0.35/hour, i.e. two orders of magnitude more of exactly
+the behaviour that preceded a freeze. To take radios out of the loop for real, un-tick **"Audio
+zone function"** on each device; `off` is for a short diagnostic window only.
+
 ⚠️ Do **not** "fix" this by adding retries, shortening cooldowns or making recovery more
 aggressive: every extra attempt asks a device that is visibly running out of sockets for
 another one. Do not blind-write anything else over 61695.
