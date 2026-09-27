@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.9
+
+- **"Ovládání LARA = off" now says so when it matters.** In that mode the add-on streams
+  Spotify but never switches a radio into its audio zone — which looks exactly like a fault:
+  the phone hands playback over, the Spotify device behaves perfectly, and the radio just sits
+  there, off or still playing whatever station it was on. It is meant as a temporary
+  diagnostic setting, and left on by accident it is silent. It now warns loudly at start-up,
+  and again, naming the zone, whenever Spotify is actually playing into the void.
+
 ## 0.3.8
 
 A radio at a customer's site stopped playing on a Wednesday evening and was still dead 38 hours

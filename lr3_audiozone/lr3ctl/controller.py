@@ -63,6 +63,8 @@ STOP_ECHO_GRACE = 6.0
 # After an underrun the LARA stops playing but keeps the control connection, so `target` still
 # says "playing" and nothing ever re-pushes. Re-push, but not more often than this.
 REPUSH_COOLDOWN = 15.0
+# How often to repeat the warning that control_mode=off is swallowing playback.
+MUZZLE_NAG_EVERY = 600.0
 
 
 def opt(cfg, key, default):
@@ -188,6 +190,7 @@ class Controller:
         self._stopped_at: dict[str, float] = {}    # mac -> when WE last sent it a stop
         self._repushed_at: dict[str, float] = {}   # mac -> when we last recovered an underrun
         self._stall_seq: dict[str, int] = {}       # mac -> its STAT count when it stalled
+        self._muzzle_warned_at = -1e9              # last control_mode=off nag
         self.applied_volume: dict[str, int] = {}   # mac -> volume we last sent
         self.slim: SlimProtoServer | None = None
         self.cli: LmsCliServer | None = None
@@ -439,6 +442,25 @@ class Controller:
                 log.info("[librespot %s] (%d earlier lines skipped)", zone.mount, dropped)
             for line in lines:
                 log.info("[librespot %s] %s", zone.mount, line)
+
+    def nag_if_muzzled(self):
+        """Say so when Spotify is playing to a zone that control_mode=off cannot act on.
+
+        This mode is a diagnostic escape hatch, and the failure it produces when left on by
+        accident is silent and baffling: the phone hands playback over, the Connect device
+        behaves perfectly, and the radio simply never joins in. It cost a customer two days.
+        One line at start-up was not enough, so say it again whenever it actually bites.
+        """
+        active = [z.name for z in self.zones if spotify_active(z.mount)]
+        if not active:
+            return
+        now = time.monotonic()
+        if now - self._muzzle_warned_at < MUZZLE_NAG_EVERY:
+            return
+        self._muzzle_warned_at = now
+        log.warning("Spotify is playing to %s, but control_mode=off — no radio is being "
+                    "switched. Set 'Ovládání LARA' back to 'slimproto' and restart the add-on.",
+                    ", ".join(active))
 
     async def supervise_zones(self):
         """Restart a pipeline whose Liquidsoap died — otherwise that device vanishes silently."""
@@ -695,7 +717,9 @@ class Controller:
             await self.start_zone(zone)
 
         if self.mode == "off":
-            log.info("control_mode=off — streams only, radios are never switched.")
+            log.warning("control_mode=off — the Spotify zones work, but NO radio will ever be "
+                        "switched into its audio zone. Set 'Ovládání LARA' back to 'slimproto' "
+                        "in the add-on configuration to make the radios play again.")
         if self.mode == "slimproto":
             self.slim = SlimProtoServer(self.our_ip, self.port, buffer_kb=self.buffer_kb,
                                         on_connect=self.on_slim_connect,
@@ -719,6 +743,8 @@ class Controller:
                         await self.tick()
                     except Exception:
                         log.exception("route tick failed")
+                else:
+                    self.nag_if_muzzled()
                 try:
                     await asyncio.wait_for(stopping.wait(), timeout=1.0)
                 except asyncio.TimeoutError:

@@ -103,6 +103,8 @@ If it happens to you: pull the mains, and **before you do**, try a short press o
 and see whether `http://<radio-ip>` still loads — that answer is worth more than anything else.
 To take the radios completely out of the loop, set `control_mode: off` and un-tick "Audio zone
 function" in each radio's own web UI.
+**Set `control_mode` back to `slimproto` afterwards** — while it is `off` the radios never
+play, and the only sign of it is a warning in the log.
 
 ## Status
 

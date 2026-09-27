@@ -285,6 +285,27 @@ async def run():
     assert ("park",) not in events, "no write to the radio's config port by default"
     print("21) with the park off, a switch-off is SlimProto only — no 61695 write")
 
+    # control_mode=off is a diagnostic escape hatch, and leaving it on is silent: Spotify
+    # behaves perfectly and the radio simply never joins in. It cost a customer two days.
+    import logging
+    said = []
+    class Catch(logging.Handler):
+        def emit(self, r): said.append(r.getMessage())
+    h = Catch(); h.setLevel(logging.WARNING); C.log.addHandler(h)
+    ctl = mk({"control_mode": "off"}, radios=[(A, "Koupelna")])
+    said.clear()          # the librespot --help probe warns on a dev box; not what we test
+    active_mounts = set()
+    ctl.nag_if_muzzled()
+    assert said == [], "nothing is playing, so there is nothing to complain about"
+    active_mounts = {ctl.mount_for(A)}
+    ctl.nag_if_muzzled()
+    assert any("control_mode=off" in m and "LARA Koupelna" in m for m in said), said
+    n = len(said)
+    ctl.nag_if_muzzled()
+    assert len(said) == n, "the warning must be rate limited, not once per second"
+    C.log.removeHandler(h)
+    print("22) control_mode=off says so when Spotify is playing into the void")
+
     # --- spotify_remote_access -------------------------------------------------
     C.DATA_DIR = tempfile.mkdtemp(prefix="lr3data_")
     C.Controller.probe_cred_cache_flag = staticmethod(lambda: True)
@@ -306,7 +327,7 @@ async def run():
     assert "--disable-credential-cache" in cmd, cmd
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in cmd, cmd
     assert f'--cache "{C.audio_cache_dir(mine)}"' in cmd, cmd
-    print("22) remote access off -> librespot is told not to store the login")
+    print("23) remote access off -> librespot is told not to store the login")
 
     # A canary in the audio cache: releasing a login must never cost the user up to 1 GB of
     # cached audio per zone, which is what would happen if the two ever shared a directory.
@@ -318,7 +339,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert not os.path.exists(new) and not os.path.exists(old), "the login must be deleted"
     assert os.path.exists(os.path.join(canary, "track")), "the audio cache must survive"
-    print("23) remote access off deletes a login stored earlier, keeping the audio cache")
+    print("24) remote access off deletes a login stored earlier, keeping the audio cache")
 
     # A radio switched off while the switch is flipped is not in this boot's zone set, so a
     # per-zone loop would leave its login on disk for ever — and in every HA backup.
@@ -327,7 +348,7 @@ async def run():
     ctl = mk(radios=[(A, "Koupelna")])
     assert ctl.purge_stored_logins() >= 2
     assert not os.path.exists(absent) and not os.path.exists(legacy_absent)
-    print("24) logins of radios that are switched off right now are released too")
+    print("25) logins of radios that are switched off right now are released too")
 
     ctl = mk({"spotify_remote_access": True}, radios=[(A, "Koupelna")])
     cmd = next(l for l in open(ctl.render_liq(ctl.zones[0]), encoding="utf-8")
@@ -343,7 +364,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert os.path.exists(C.credentials_file(mine))
     assert not os.path.exists(C.legacy_credentials_file(mine)), "the superseded copy must go"
-    print("25) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
+    print("26) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
 
     ctl = mk(radios=[(A, "Koupelna")])           # remote access off
     ctl.cred_cache_flag_ok = False
@@ -353,7 +374,7 @@ async def run():
     assert "--disable-credential-cache" in ctl.librespot_cache_args(mine)
     for part in (C.audio_cache_dir(mine), C.login_cache_dir(mine)):
         assert f'"{part}"' in ctl.librespot_cache_args(mine), "paths must be quoted for sh -c"
-    print("26) the flag follows the probe, and the paths are quoted")
+    print("27) the flag follows the probe, and the paths are quoted")
 
     # The audio cache used to be a hard-coded 1 GB per zone, i.e. 4 GB on a four-zone site,
     # written to the soldered eMMC of an HA Green.
@@ -364,7 +385,7 @@ async def run():
     assert "--cache-size-limit" not in off and "--cache " not in off, off
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in off, \
         "the login dir must stay even with the audio cache off — it is what the switch clears"
-    print("27) the audio cache is sized by the option, and 0 drops it without losing the rest")
+    print("28) the audio cache is sized by the option, and 0 drops it without losing the rest")
 
     # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
     # Without this, deleting that one call leaves every other case green.
@@ -376,7 +397,7 @@ async def run():
     except Exception:
         pass                                     # liquidsoap is not installed here; fine
     assert not os.path.exists(left), "start_zone must release the login before spawning"
-    print("28) start_zone releases the stored login before librespot can be started")
+    print("29) start_zone releases the stored login before librespot can be started")
 
 
 asyncio.run(run())

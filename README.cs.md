@@ -96,6 +96,8 @@ především je nově vypnuté vracení rádia na seznam stanic přes port 61695
 Když se to stane tobě: vytáhni napájení, ale **předtím** zkus krátký stisk RESET a jestli se
 načte `http://<ip-lary>` — tahle odpověď má větší cenu než cokoli jiného. Úplně mimo hru dostaneš
 rádia nastavením `control_mode: off` a vypnutím „Audio zone function" ve webovém rozhraní každé LARY.
+**Nezapomeň pak `control_mode` vrátit na `slimproto`** — dokud je `off`, rádia nikdy nehrají
+a jediné, co to prozradí, je varování v logu.
 
 ## Stav
 
