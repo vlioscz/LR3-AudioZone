@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.10
+
+- **The log now says which version is running.** Until now nothing did, so answering "did the
+  update actually land?" meant guessing from the wording of other messages. The first line of
+  the log is now `LR3 AudioZone v0.3.10 — mode=slimproto …`, which also shows at a glance
+  whether the radios are being controlled at all.
+
 ## 0.3.9
 
 - **"Ovládání LARA = off" now says so when it matters.** In that mode the add-on streams

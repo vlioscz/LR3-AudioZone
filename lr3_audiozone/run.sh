@@ -27,7 +27,7 @@ HA_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 ICE_HOSTNAME="$HA_IP"
 [ "$ICE_HOSTNAME" = "<HA_IP>" ] && ICE_HOSTNAME="localhost"
 
-log "Startuji LR3 AudioZone (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
+log "Startuji LR3 AudioZone v${LR3_VERSION:-?} (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
 log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti zpět na rádia"
 
 # --- D-Bus + Avahi (librespot z raspotify používá avahi zeroconf backend) ---

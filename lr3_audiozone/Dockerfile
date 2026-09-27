@@ -2,6 +2,11 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 ARG BUILD_ARCH=aarch64
+# The Supervisor's builder passes the add-on version here. Keeping it in the image is the
+# only way the log can say which build is running — twice now that had to be guessed from
+# the wording of a message, once while a customer's radios sat silent for two days.
+ARG BUILD_VERSION=dev
+ENV LR3_VERSION=${BUILD_VERSION}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Icecast2 = streaming server. Liquidsoap = never-dropping Spotify source.

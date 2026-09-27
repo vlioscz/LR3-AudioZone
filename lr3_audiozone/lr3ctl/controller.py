@@ -694,9 +694,10 @@ class Controller:
                 self._loop.add_signal_handler(getattr(signal, sig), stopping.set)
             except (AttributeError, NotImplementedError, RuntimeError):
                 pass
-        log.info("controller mode=%s our_ip=%s idle_timeout=%ds buffer=%.1fs (%d KB @ %d kbps)",
-                 self.mode, self.our_ip, self.idle_timeout, self.buffer_seconds,
-                 self.buffer_kb, self.bitrate)
+        log.info("LR3 AudioZone v%s — mode=%s our_ip=%s idle_timeout=%ds "
+                 "buffer=%.1fs (%d KB @ %d kbps)",
+                 os.environ.get("LR3_VERSION", "?"), self.mode, self.our_ip, self.idle_timeout,
+                 self.buffer_seconds, self.buffer_kb, self.bitrate)
         if self.remote_access:
             log.info("Spotify remote access is ON — the last account to select a zone stays "
                      "logged in and sees it from anywhere, not just on this network")
