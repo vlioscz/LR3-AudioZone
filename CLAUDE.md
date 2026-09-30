@@ -131,6 +131,44 @@ pulled. Unproven as cause — 52 other underruns that month recovered through th
 but since 0.3.8 the re-push requires a **STAT after the underrun**, so a radio whose last word
 was "I stopped" is never pushed again (`Player.stat_seq` vs `Controller._stall_seq`).
 
+## ⚠️ The underruns are a constant source-clock deficit, ~1640 ppm (2026-09-30)
+
+Measured from the `playing:` progress lines 0.3.8 added, on a third-party 3-radio install
+(172.16.0.x, not one of our sites). The LARA's input buffer **drains linearly** the whole time
+it plays:
+
+```
+12:18:17  306 s in,  6.8 MB fetched, in_buf=49696 B
+12:23:17  619 s in, 13.7 MB fetched, in_buf=38104 B   -38.6 B/s
+12:28:17  931 s in, 20.5 MB fetched, in_buf=25912 B   -40.6 B/s
+12:33:17 1244 s in, 27.4 MB fetched, in_buf=14432 B   -38.3 B/s
+12:38:17 1556 s in, 34.3 MB fetched, in_buf= 2344 B   -40.3 B/s
+12:39:01  STMu -> mode=stop
+```
+
+**All three radios drain at the same ~39 B/s (1570–1850 ppm, mean ~1640).** Three independent
+crystals would not agree to within a few percent of each other, so this is **our source running
+slow**, not the players: at 192 kbps we owe 24000 B/s and deliver about 23961.
+
+Consequences, and they matter:
+
+- A 64 KB buffer empties in **~28 min**, which is exactly the observed underrun cadence and
+  exactly site 5's "54 underruns in a month, not tied to track boundaries".
+- **Raising `buffer_seconds` does not fix this — it only lengthens the cycle** (4 s ≈ 42 min).
+  That was the advice given after the 2026-09-23 freeze and it is a palliative, not a cure.
+- Prime suspect: Liquidsoap paces the stream on its own clock and the image logs
+  `[clock:3] Using builtin (low-precision) implementation for latency control`. A ~0.16 % slow
+  pacing clock produces exactly this deficit. Investigate a high-precision clock, or take the
+  pacing off the output entirely so the player's own fetch rate governs (`sync="none"`-style),
+  bearing in mind Icecast will disconnect a source it cannot keep up with.
+
+**The zombie state.** After an underrun a radio can come back claiming to play while fetching
+nothing at all — `bytes_rx` frozen, `in_buf=0`, `elapsed` still climbing, no sound. Two radios
+sat like that for **4875 s** in this log. A re-push **to the same mount does not clear it**; the
+one thing that did was a push to a *different* mount (the group zone), after which all three
+fetched again within two seconds. This is what a user reports as "it played all morning and now
+it will not pick up Spotify". Without 0.3.8's stall warning it is completely invisible.
+
 ⚠️ **Underruns are the thing to fix, not the recovery.** 54 in one month at that site, 52 of
 them on the single radio in daily use, and they are *not* tied to track boundaries or cache
 eviction (33 of 54 are >60 s from either). They are what the customer experiences as "the music
