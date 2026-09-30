@@ -169,9 +169,13 @@ Consequences, and they matter:
 - ⚠️ `input.external.rawaudio` must keep `samplerate=44100` explicitly — librespot always emits
   44100 and that parameter defaults to the *frame* rate, so without it the PCM is read 8.8 %
   too fast.
-- **The buffer is not a lever.** A LARA never holds more than ~62 KB whatever threshold `strm`
-  carries: measured at 4 s / 96 KB the buffer still started at ~61 KB and still emptied in
-  26 minutes. Only the deficit matters.
+- **The buffer is not a lever.** A LARA appears never to hold more than ~62 KB whatever
+  threshold `strm` carries: at 4 s / 96 KB the buffer still emptied in 26 minutes, and
+  extrapolating the first sample back at 39 B/s puts the starting fill at ~61 KB, not 96 KB.
+  ⚠️ That ~62 KB is **extrapolated, not observed** — the first progress line used to come five
+  minutes in. Since 0.4.1 it comes ~20 s in, so the next log measures the initial fill directly;
+  check it before treating the ceiling as fact. A *lower* threshold is honoured (CLAUDE.md's
+  latency note: 64 KB → ~4.5 s lag, 36 KB → ~2 s), so the cap is a ceiling, not indifference.
 
 **The zombie state.** After an underrun a radio can come back claiming to play while fetching
 nothing at all — `bytes_rx` frozen, `in_buf=0`, `elapsed` still climbing, no sound. Two radios

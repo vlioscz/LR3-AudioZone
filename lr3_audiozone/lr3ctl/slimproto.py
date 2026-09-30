@@ -30,6 +30,10 @@ STALL_AFTER = 30.0
 # One progress line per playing radio at this interval. Sparse on purpose: the HA log ring
 # buffer is the evidence store, and nine days of history only survived because it is sparse.
 PROGRESS_EVERY = 300.0
+# ...except the first one, which comes early. It is the only chance to see how much the radio
+# actually took before it started, and that number was missing exactly when it was needed: how
+# full a LARA fills is what decides whether raising buffer_seconds buys anything at all.
+FIRST_PROGRESS_AFTER = 20.0
 _MP3_CODEC = b"m\x3f\x3f\x3f\x3f"  # 'm' = mp3 + 4 ignored pcm bytes
 
 # STAT payload (player -> server), big-endian, unpadded. Fields:
@@ -279,7 +283,8 @@ class SlimProtoServer:
 
         if player.mode != "play":
             player._stall_logged = False
-            player._reported_at = now
+            # Arrange for the first line of the next session to come early, not in five minutes.
+            player._reported_at = now - PROGRESS_EVERY + FIRST_PROGRESS_AFTER
             return
 
         stalled = now - player._rx_at

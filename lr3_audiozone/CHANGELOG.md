@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- The first "playing" line in the log now appears about twenty seconds after a zone starts,
+  instead of after five minutes. That first line is the only place you can see how much audio
+  the radio actually took before it began — which is what decides whether raising the buffer
+  setting achieves anything, and it was missing exactly when it was needed.
+
 ## 0.4.0
 
 **The music should stop cutting out.** Every radio we have measured, at two unrelated sites,
