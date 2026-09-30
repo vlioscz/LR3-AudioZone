@@ -8,6 +8,17 @@ settings.log.level.set(3)
 # Kontejner addonu běží jako root; Liquidsoap by se jinak z bezpečnosti ukončil.
 settings.init.allow_root.set(true)
 
+# --- Vzorkovací frekvence výstupu ---
+# ⚠️ Tohle je oprava podtékajícího bufferu, ne kosmetika. Změřeno na dvou nezávislých
+# instalacích: při 44,1 kHz ubývá LAŘE vstupní buffer stále o ~39 B/s, tedy ~1650 ppm, a za
+# 26 minut je prázdný — pokaždé. Taktování Liquidsoapu v tom nejede, ten spí do absolutního
+# termínu a chybu nekumuluje (src/clock.ml: t0 + frame_duration*ticks - time()). Dva různé
+# hostitele se navíc nemohou shodnout na stejných 39 B/s; firmware stejného modelu ano.
+# Při 48 kHz vychází MP3 rámec na přesně 144*bitrate/48000 bajtů (192k → 576 B) bez jediného
+# vycpávkového bitu, a 48 kHz je zároveň frekvence, kterou umí odvodit běžný 12,288MHz
+# audio krystal beze zbytku. Když deficit zmizí, byla příčina tady.
+settings.frame.audio.samplerate.set(%%SAMPLERATE%%)
+
 # --- Spotify Connect přes librespot ---
 # librespot se přes avahi objeví na LAN jako Spotify zařízení "%%ZONE_NAME%%"
 # a posílá raw S16 PCM na stdout. Píše RYCHLEJI než realtime, takže bez omezení
@@ -34,7 +45,11 @@ spotify = input.external.rawaudio(
   id="spotify_%%MOUNT%%",
   restart=true, restart_on_error=true,
   buffer=0.4, max=0.8, log_overfull=false,
-  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --initial-volume 100 %%LIBRESPOT_CACHE_ARGS%% --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
+  # librespot posílá VŽDY 44100 Hz S16. Musí se to říct explicitně, protože jinak se převezme
+  # globální frame.audio.samplerate — a při 48 kHz by se PCM přečetlo o 8,8 % rychleji.
+  # Převzorkování na výstupní frekvenci si Liquidsoap udělá sám (libsamplerate).
+  samplerate=44100,
+  'LR3_MOUNT=%%MOUNT%% librespot --name "%%ZONE_NAME%%" --device-type speaker --backend pipe --format S16 --bitrate %%SPOTIFY_BITRATE%% --initial-volume %%INITIAL_VOLUME%% %%LIBRESPOT_CACHE_ARGS%% --enable-volume-normalisation --onevent /etc/lr3/spotify_event.sh 2>>/tmp/librespot_%%MOUNT%%.log; sleep 3'
 )
 
 # --- Ticho, aby byl mount vždy krmený ---

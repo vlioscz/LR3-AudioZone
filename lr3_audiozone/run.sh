@@ -27,7 +27,11 @@ HA_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 ICE_HOSTNAME="$HA_IP"
 [ "$ICE_HOSTNAME" = "<HA_IP>" ] && ICE_HOSTNAME="localhost"
 
-log "Startuji LR3 AudioZone v${LR3_VERSION:-?} (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
+# Read the version out of the manifest we baked into the image. A build arg was tried first
+# (0.3.10) and arrived empty in the field, so the log still could not say what was running.
+LR3_VERSION="$(sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$//p' /etc/lr3/config.yaml 2>/dev/null)"
+export LR3_VERSION="${LR3_VERSION:-?}"
+log "Startuji LR3 AudioZone v${LR3_VERSION} (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
 log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti zpět na rádia"
 
 # --- D-Bus + Avahi (librespot z raspotify používá avahi zeroconf backend) ---

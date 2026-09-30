@@ -2,11 +2,10 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 ARG BUILD_ARCH=aarch64
-# The Supervisor's builder passes the add-on version here. Keeping it in the image is the
-# only way the log can say which build is running — twice now that had to be guessed from
-# the wording of a message, once while a customer's radios sat silent for two days.
-ARG BUILD_VERSION=dev
-ENV LR3_VERSION=${BUILD_VERSION}
+# The log has to be able to say which build is running — that had to be guessed twice, once
+# while a customer's radios sat silent for two days. 0.3.10 took it from the BUILD_VERSION
+# build arg and got an empty string in the field, so read it from the manifest instead:
+# that file is the version, and it is in the build context regardless of how we are built.
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Icecast2 = streaming server. Liquidsoap = never-dropping Spotify source.
@@ -54,6 +53,8 @@ COPY run.sh /run.sh
 COPY icecast.xml.tpl /etc/lr3/icecast.xml.tpl
 COPY radio.liq.tpl /etc/lr3/radio.liq.tpl
 COPY lr3ctl /opt/lr3ctl
+# The manifest, purely so run.sh can print the version it is actually running.
+COPY config.yaml /etc/lr3/config.yaml
 
 RUN chmod a+x /run.sh
 

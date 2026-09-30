@@ -327,6 +327,11 @@ class SlimProtoServer:
         p = self.players.get(mac)
         if not p:
             return False
+        # Start the stall clock now. It measures the gap since the last byte arrived, and
+        # after a long pause that gap is hours old — which is why a freshly switched-on
+        # zone used to report 'has fetched nothing for 37269s' in the same second.
+        p._rx_at = time.monotonic()
+        p._stall_logged = False
         await self.set_power(mac, True)
         path = "/" + mount.lstrip("/")
         host = f"{self.our_ip}:{self.icecast_port}"

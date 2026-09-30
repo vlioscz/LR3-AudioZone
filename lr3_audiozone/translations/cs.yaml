@@ -17,6 +17,13 @@ configuration:
     description: >-
       Kvalita streamu ze Spotify Connect (librespot): 96, 160 nebo 320 kbps.
       Vyžaduje Spotify Premium účet.
+  samplerate:
+    name: Vzorkovací frekvence výstupu (Hz)
+    description: >-
+      Nech 48000. Při 44100 každá dosud změřená LARA spotřebovává zvuk o kousek rychleji, než ho
+      addon stíhá dodávat — asi o 39 bajtů za sekundu — takže se jí vyprázdní buffer a hudba se
+      zhruba po 26 minutách zastaví, ať je buffer nastavený jakkoli. Při 48000 tenhle nesoulad
+      mizí. 44100 zůstává jen kvůli možnosti porovnání.
   spotify_remote_access:
     name: Přístup ke Spotify zvenčí sítě
     description: >-
@@ -58,17 +65,18 @@ configuration:
       Nech prázdné a addon prohledá podsíť, ve které sám je. Vyplň jen tehdy, když jsou
       rádia jinde — první tři čísla adresy, např. „10.0.0".
   zone_volume:
-    name: Výchozí hlasitost zóny (%)
+    name: Počáteční hlasitost (%)
     description: >-
-      Hlasitost, kterou addon pošle rádiu při zapnutí zóny. Pozor: na firmwaru 3.7.001 se
-      zdá, že se na výstupu neprojeví — hlasitost se reálně ovládá posuvníkem v aplikaci
-      Spotify. 0 = nastavení hlasitosti rádiu vůbec neposílat.
+      Kde u každé zóny začíná posuvník hlasitosti v aplikaci Spotify. 0 = nechat naplno. Je to
+      jediná hlasitost, která něco dělá: firmware 3.7.001 hlasitost poslanou po síti ignoruje a
+      vlastní tlačítka rádia během přehrávání zóny jen ztlumí a obnoví.
   buffer_seconds:
-    name: Náskok bufferu (s)
+    name: Jak dlouho si LARA načítá, než začne hrát (s)
     description: >-
-      Kolik sekund zvuku si LARA načte, než začne hrát. Tohle je hlavní zdroj zpoždění
-      mezi Spotify a reproduktorem — nižší hodnota = svižnější reakce, ale při zakolísání
-      sítě může zvuk vypadávat. 1.5 s je bezpečný kompromis, pod 0.8 s to už bývá riskantní.
+      Kolik zvuku si rádio nabere, než se ozve první tón — je to tedy zároveň doba, kterou po
+      stisku play čekáš. Zvyšování NEVYLÉČÍ vypadávající hudbu: rádio si víc než zhruba 62 KB
+      nenabere, ať mu pošleme cokoli, takže nad ~2,7 s se mění jen to čekání. Když se hudba
+      zastavuje každou půlhodinu, kouká se na Vzorkovací frekvenci výstupu, ne sem.
   idle_timeout:
     name: Prodleva vypnutí (s)
     description: >-

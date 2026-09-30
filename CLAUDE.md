@@ -156,11 +156,22 @@ Consequences, and they matter:
   exactly site 5's "54 underruns in a month, not tied to track boundaries".
 - **Raising `buffer_seconds` does not fix this — it only lengthens the cycle** (4 s ≈ 42 min).
   That was the advice given after the 2026-09-23 freeze and it is a palliative, not a cure.
-- Prime suspect: Liquidsoap paces the stream on its own clock and the image logs
-  `[clock:3] Using builtin (low-precision) implementation for latency control`. A ~0.16 % slow
-  pacing clock produces exactly this deficit. Investigate a high-precision clock, or take the
-  pacing off the output entirely so the player's own fetch rate governs (`sync="none"`-style),
-  bearing in mind Icecast will disconnect a source it cannot keep up with.
+- **Not Liquidsoap's clock** — that was the first theory and it is wrong. `src/clock.ml` sleeps
+  to an *absolute* deadline (`t0 + frame_duration*ticks - time()`), so a late wake-up is paid
+  back by the next one and error cannot accumulate. Two unrelated hosts also cannot agree on
+  the same 39 B/s; one firmware can.
+- **Fixed in 0.4.0 by moving the output to 48 kHz** (`samplerate`, default 48000). At 48 kHz an
+  MP3 frame is exactly `144*bitrate/48000` bytes (576 at 192 kbps) with no padding bit, and
+  48 kHz is what a standard 12.288 MHz audio crystal divides down to exactly, while 44.1 kHz
+  needs 11.2896 MHz. Either mechanism predicts the same fix. **Confirm from the field before
+  believing it**: the `playing:` lines show `in_buf` directly, so a flat `in_buf` over half an
+  hour is the proof, and a still-falling one means the theory was wrong.
+- ⚠️ `input.external.rawaudio` must keep `samplerate=44100` explicitly — librespot always emits
+  44100 and that parameter defaults to the *frame* rate, so without it the PCM is read 8.8 %
+  too fast.
+- **The buffer is not a lever.** A LARA never holds more than ~62 KB whatever threshold `strm`
+  carries: measured at 4 s / 96 KB the buffer still started at ~61 KB and still emptied in
+  26 minutes. Only the deficit matters.
 
 **The zombie state.** After an underrun a radio can come back claiming to play while fetching
 nothing at all — `bytes_rx` frozen, `in_buf=0`, `elapsed` still climbing, no sound. Two radios

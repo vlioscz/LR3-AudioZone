@@ -1,6 +1,6 @@
 name: LR3 AudioZone
 slug: lr3_audiozone
-version: "0.3.10"
+version: "0.4.0"
 description: Spotify Connect → automatické přehrání na ELKO EP „LARA" přes Slim server (SlimProto + LMS CLI)
 url: https://github.com/vlioscz/LR3-AudioZone
 arch:
@@ -16,6 +16,7 @@ options:
   source_password: "changeme"
   bitrate: 192
   spotify_bitrate: 320
+  samplerate: 48000
   spotify_remote_access: false
   audio_cache_mb: 200
   zone_name: "Audio zóna"
@@ -39,6 +40,7 @@ schema:
   source_password: password
   bitrate: int
   spotify_bitrate: list(96|160|320)
+  samplerate: list(44100|48000)
   spotify_remote_access: bool
   audio_cache_mb: int(0,4096)
   zone_name: str

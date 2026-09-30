@@ -306,6 +306,32 @@ async def run():
     C.log.removeHandler(h)
     print("22) control_mode=off says so when Spotify is playing into the void")
 
+    # --- 0.4.0: output samplerate and the volume that actually does something ----
+    # At 44.1 kHz every LARA measured drains its input buffer ~39 B/s and underruns every
+    # 26 minutes, on two unrelated sites. The output moves to 48 kHz; librespot still emits
+    # 44100, so that has to be stated explicitly or the PCM is read 8.8 % too fast.
+    ctl = mk(radios=[(A, "Koupelna")])
+    assert ctl.samplerate == 48000, "48 kHz is the default from 0.4.0"
+    body = open(ctl.render_liq(ctl.zones[0]), encoding="utf-8").read()
+    assert "%%" not in body, [l for l in body.splitlines() if "%%" in l]
+    assert "settings.frame.audio.samplerate.set(48000)" in body
+    assert "samplerate=44100," in body, "librespot's own rate must stay pinned at 44100"
+    assert body.index("settings.frame.audio.samplerate.set") < body.index("input.external"),         "the frame rate must be set before any source is created"
+    back = mk({"samplerate": 44100}, radios=[(A, "Koupelna")])
+    b2 = open(back.render_liq(back.zones[0]), encoding="utf-8").read()
+    assert "settings.frame.audio.samplerate.set(44100)" in b2 and "samplerate=44100," in b2
+    print("23) the output runs at 48 kHz while librespot stays pinned to 44100")
+
+    # zone_volume used to reach only audg, which is inaudible on this firmware, while the
+    # Spotify slider sat hardcoded at 100 — "I set 50 and it plays at 100".
+    for zv, want in ((50, 50), (0, 100), (90, 90), (150, 100)):
+        c = mk({"zone_volume": zv}, radios=[(A, "K")])
+        assert c.initial_volume() == want, (zv, c.initial_volume())
+        cmd = next(l for l in open(c.render_liq(c.zones[0]), encoding="utf-8")
+                   if "librespot --name" in l)
+        assert f"--initial-volume {want} " in cmd, cmd
+    print("24) zone_volume now sets where the Spotify slider starts")
+
     # --- spotify_remote_access -------------------------------------------------
     C.DATA_DIR = tempfile.mkdtemp(prefix="lr3data_")
     C.Controller.probe_cred_cache_flag = staticmethod(lambda: True)
@@ -327,7 +353,7 @@ async def run():
     assert "--disable-credential-cache" in cmd, cmd
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in cmd, cmd
     assert f'--cache "{C.audio_cache_dir(mine)}"' in cmd, cmd
-    print("23) remote access off -> librespot is told not to store the login")
+    print("25) remote access off -> librespot is told not to store the login")
 
     # A canary in the audio cache: releasing a login must never cost the user up to 1 GB of
     # cached audio per zone, which is what would happen if the two ever shared a directory.
@@ -339,7 +365,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert not os.path.exists(new) and not os.path.exists(old), "the login must be deleted"
     assert os.path.exists(os.path.join(canary, "track")), "the audio cache must survive"
-    print("24) remote access off deletes a login stored earlier, keeping the audio cache")
+    print("26) remote access off deletes a login stored earlier, keeping the audio cache")
 
     # A radio switched off while the switch is flipped is not in this boot's zone set, so a
     # per-zone loop would leave its login on disk for ever — and in every HA backup.
@@ -348,7 +374,7 @@ async def run():
     ctl = mk(radios=[(A, "Koupelna")])
     assert ctl.purge_stored_logins() >= 2
     assert not os.path.exists(absent) and not os.path.exists(legacy_absent)
-    print("25) logins of radios that are switched off right now are released too")
+    print("27) logins of radios that are switched off right now are released too")
 
     ctl = mk({"spotify_remote_access": True}, radios=[(A, "Koupelna")])
     cmd = next(l for l in open(ctl.render_liq(ctl.zones[0]), encoding="utf-8")
@@ -364,7 +390,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert os.path.exists(C.credentials_file(mine))
     assert not os.path.exists(C.legacy_credentials_file(mine)), "the superseded copy must go"
-    print("26) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
+    print("28) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
 
     ctl = mk(radios=[(A, "Koupelna")])           # remote access off
     ctl.cred_cache_flag_ok = False
@@ -374,7 +400,7 @@ async def run():
     assert "--disable-credential-cache" in ctl.librespot_cache_args(mine)
     for part in (C.audio_cache_dir(mine), C.login_cache_dir(mine)):
         assert f'"{part}"' in ctl.librespot_cache_args(mine), "paths must be quoted for sh -c"
-    print("27) the flag follows the probe, and the paths are quoted")
+    print("29) the flag follows the probe, and the paths are quoted")
 
     # The audio cache used to be a hard-coded 1 GB per zone, i.e. 4 GB on a four-zone site,
     # written to the soldered eMMC of an HA Green.
@@ -385,7 +411,7 @@ async def run():
     assert "--cache-size-limit" not in off and "--cache " not in off, off
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in off, \
         "the login dir must stay even with the audio cache off — it is what the switch clears"
-    print("28) the audio cache is sized by the option, and 0 drops it without losing the rest")
+    print("30) the audio cache is sized by the option, and 0 drops it without losing the rest")
 
     # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
     # Without this, deleting that one call leaves every other case green.
@@ -397,7 +423,7 @@ async def run():
     except Exception:
         pass                                     # liquidsoap is not installed here; fine
     assert not os.path.exists(left), "start_zone must release the login before spawning"
-    print("29) start_zone releases the stored login before librespot can be started")
+    print("31) start_zone releases the stored login before librespot can be started")
 
 
 asyncio.run(run())

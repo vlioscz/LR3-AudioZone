@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+
+**The music should stop cutting out.** Every radio we have measured, at two unrelated sites,
+consumed audio a fraction faster than the add-on could deliver it — about 39 bytes a second.
+That is tiny, but it is relentless: the radio's buffer drained steadily and ran dry roughly
+every 26 minutes, the sound stopped, and sometimes it did not come back on its own. It never
+lined up with a track change, which is why it looked random for so long.
+
+- **The stream now goes out at 48 kHz instead of 44.1 kHz**, which is what removes the
+  mismatch. If anything sounds wrong, Output sample rate can be put back to 44100.
+- **Raising the buffer was never going to fix this** and the option now says so: a radio never
+  holds more than about 62 KB no matter what it is told, so a bigger setting only makes you
+  wait longer before the first sound.
+- **"Starting volume" now works.** It used to be sent to the radio, which ignores it on this
+  firmware, while the Spotify slider stayed at full — so setting 50 % changed nothing. It now
+  sets where the Spotify slider starts, which is the only volume that does anything here.
+- The log says which version is running again. 0.3.10 tried to and printed `v?`.
+- A zone that has just been switched on no longer reports that it has "fetched nothing" for
+  however long it had been idle beforehand.
+
+If the music still stops after half an hour, the log now shows exactly why: look for the
+`playing:` lines and whether `in_buf` falls steadily.
+
 ## 0.3.10
 
 - **The log now says which version is running.** Until now nothing did, so answering "did the

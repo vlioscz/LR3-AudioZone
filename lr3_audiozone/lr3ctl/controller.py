@@ -157,6 +157,9 @@ class Controller:
         self.source_password = opt(cfg, "source_password", "changeme")
         self.spotify_bitrate = opt(cfg, "spotify_bitrate", 320)
         self.remote_access = bool(opt(cfg, "spotify_remote_access", False))
+        # 48000 by default: at 44.1 kHz every LARA measured so far drains its input buffer at a
+        # steady ~39 B/s and underruns every 26 minutes. See radio.liq.tpl for the evidence.
+        self.samplerate = int(opt(cfg, "samplerate", 48000))
         self.park_on_off = bool(opt(cfg, "park_on_zone_off", False))
         # MB of Spotify audio kept on disk per zone; 0 = none. It used to be a hard-coded 1 GB
         # *each*, so a four-zone site could put 4 GB of streamed music on the soldered eMMC of
@@ -376,6 +379,8 @@ class Controller:
         for key, val in (("PORT", self.port), ("SOURCE_PASSWORD", self.source_password),
                          ("BITRATE", self.bitrate), ("SPOTIFY_BITRATE", self.spotify_bitrate),
                          ("MOUNT", zone.mount), ("ZONE_NAME", zone.name),
+                         ("SAMPLERATE", self.samplerate),
+                         ("INITIAL_VOLUME", self.initial_volume()),
                          ("LIBRESPOT_CACHE_ARGS", self.librespot_cache_args(zone.mount))):
             tpl = tpl.replace(f"%%{key}%%", str(val))
         path = os.path.join(STATE_DIR, f"zone_{zone.mount}.liq")
@@ -530,6 +535,17 @@ class Controller:
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
+    def initial_volume(self) -> int:
+        """Where the Spotify slider starts, which on this firmware IS the volume.
+
+        `zone_volume` used to reach only `audg`, the radio's hardware volume — and `audg` has
+        no audible effect on fw 3.7.001. So setting it to 50 changed nothing while the slider
+        sat at a hardcoded 100, which is exactly what a user reported. Feed it to librespot
+        instead, where the one working volume control lives. 0 keeps the old meaning of "do not
+        touch anything", which for the slider means full scale.
+        """
+        return 100 if self.volume <= 0 else min(100, self.volume)
+
     def desired_volume(self) -> int | None:
         """The level a radio is set to when its zone switches on. None = leave it alone.
 

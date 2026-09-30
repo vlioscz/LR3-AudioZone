@@ -17,6 +17,13 @@ configuration:
     description: >-
       Spotify Connect (librespot) streaming quality: 96, 160 or 320 kbps.
       Requires a Spotify Premium account.
+  samplerate:
+    name: Output sample rate (Hz)
+    description: >-
+      Leave this at 48000. At 44100 every LARA measured so far consumes audio very slightly faster
+      than the add-on can deliver it - about 39 bytes a second - so its buffer empties and the
+      music stops roughly every 26 minutes, whatever you set the buffer to. At 48000 that mismatch
+      disappears. 44100 is kept only so the two can be compared.
   spotify_remote_access:
     name: Spotify access from outside the network
     description: >-
@@ -59,17 +66,19 @@ configuration:
       Leave empty and the add-on scans the subnet it is on. Set it only if the radios live
       elsewhere - the first three numbers of the address, e.g. "10.0.0".
   zone_volume:
-    name: Default zone volume (%)
+    name: Starting volume (%)
     description: >-
-      Volume the add-on sends to the radio when the zone switches on. Note: on firmware 3.7.001
-      this appears to have no effect on the output - volume is really controlled with the slider
-      in the Spotify app. 0 = never send a volume to the radio at all.
+      Where the volume slider in the Spotify app starts for each zone. 0 leaves it at full. This
+      is the only volume that does anything: on firmware 3.7.001 the radio ignores volume sent
+      over the network, and its own buttons only mute and unmute while a zone is playing.
   buffer_seconds:
-    name: Buffer lead (s)
+    name: How long LARA buffers before it starts (s)
     description: >-
-      Seconds of audio the LARA loads before it starts playing. This is the main source of
-      delay between Spotify and the speaker - lower is snappier but a network hiccup can cause
-      dropouts. 1.5 s is a safe compromise; below 0.8 s tends to get risky.
+      How much audio the radio collects before the first sound comes out, so it is also how long
+      you wait after pressing play. Raising it does NOT cure music that cuts out: the radio never
+      holds more than about 62 KB whatever it is told, so anything above ~2.7 s changes the wait
+      and nothing else. If the music stops every half hour, the Output sample rate is the setting
+      to look at, not this one.
   idle_timeout:
     name: Power-off delay (s)
     description: >-
