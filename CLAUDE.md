@@ -172,13 +172,21 @@ Consequences, and they matter:
 - ⚠️ `input.external.rawaudio` must keep `samplerate=44100` explicitly — librespot always emits
   44100 and that parameter defaults to the *frame* rate, so without it the PCM is read 8.8 %
   too fast.
-- **The buffer is not a lever.** A LARA appears never to hold more than ~62 KB whatever
-  threshold `strm` carries: at 4 s / 96 KB the buffer still emptied in 26 minutes, and
-  extrapolating the first sample back at 39 B/s puts the starting fill at ~61 KB, not 96 KB.
-  ⚠️ That ~62 KB is **extrapolated, not observed** — the first progress line used to come five
-  minutes in. Since 0.4.1 it comes ~20 s in, so the next log measures the initial fill directly;
-  check it before treating the ceiling as fact. A *lower* threshold is honoured (CLAUDE.md's
-  latency note: 64 KB → ~4.5 s lag, 36 KB → ~2 s), so the cap is a ceiling, not indifference.
+- ✅ **48 kHz CONFIRMED on hardware (2026-10-04).** Third-party 3-radio install, same log,
+  before and after:
+
+  ```
+  09-30 (44.1 kHz)  in_buf 49616 → 37648 → 25840 → 14128 → 2264   -39 B/s, STMu x13 that day
+  10-03 (48 kHz)    in_buf 62400 → 85312 → 108224 → 130312 → ... → 126972 over 75 min
+  ```
+
+  The buffer now **fills** from the start threshold to the player's full 131072 B and holds
+  there. **Underruns: 13 on the day before the change, 0 in the four days since.**
+- ❌ **The "~62 KB ceiling" was wrong** and is retracted. ~62 KB is just the start threshold
+  (`buffer_seconds` × bitrate); the radio grows past it to ~130 KB once the source can keep up.
+  At 44.1 kHz it never could, so the number only ever went down from there and looked like a
+  cap. `buffer_seconds` therefore sets the pre-roll (and the wait before the first sound) only;
+  the radio manages its own buffer after that.
 
 ## Site 5 freeze statistics, 2026-08-13 → 2026-10-04 (one log, 7327 lines)
 
@@ -215,6 +223,23 @@ So the freeze is **not** caused by anything we send during playback, which rules
 family of theories built around pushes, parks and recovery. 0.4.2 adds the measurement that was
 missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
 whether the unit was still alive.
+
+## Switching a playing radio to another mount (fixed in 0.4.3)
+
+`push_stream` used to send `strm-s` with the new URL straight at a player that was already
+streaming. This firmware does not replace the stream: it stops fetching entirely. Caught in the
+field on 2026-10-02 — Obývák was 4079 s / 106.8 MB into `/lara_10318e`, got `-> play /all`, and
+`bytes_received` froze on the spot while `in_buf` went 126528 → 0 with no sound.
+
+**Every stall warning in that log — 18 of them — lands 30–31 s after a push**, i.e. the radio
+fetched nothing for the whole detection window following a mount change. It is not specific to
+the group: individual→individual switches do it too. 0.4.3 sends `strm-q` first when
+`current_mount` is set and differs, both commands back to back on the same connection.
+
+A re-push of the **same** mount (the underrun recovery) deliberately does *not* send `strm-q` —
+that path should not get more aggressive. If the zombie state ever reappears, note that a plain
+re-push never cleared it while a push to a *different* mount did within two seconds, so adding
+the terminate there is the next thing to try.
 
 ## Group → individual transitions (open, 2026-10-02)
 

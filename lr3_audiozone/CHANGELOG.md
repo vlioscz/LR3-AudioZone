@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.3
+
+- **Moving music from one room to another, or into "LARA All", no longer leaves a radio
+  silent.** Switching a radio that was already playing used to hand it the new stream without
+  stopping the old one, and this firmware does not cope: it stopped fetching altogether and
+  went quiet while everything still looked correct. The old stream is now ended first.
+- The log shows the add-on version again. It has been printing a blank since 0.4.0.
+
+**And the 48 kHz change in 0.4.0 is confirmed working.** On a three-radio site: thirteen
+dropouts on the day before the update, and none at all in the four days since. The radios now
+fill their buffers to the brim and hold them there for over an hour instead of slowly running
+dry every twenty-six minutes.
+
 ## 0.4.2
 
 - **When a radio drops out, the add-on now checks by itself whether the unit is still alive**

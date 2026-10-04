@@ -332,6 +332,16 @@ class SlimProtoServer:
         p = self.players.get(mac)
         if not p:
             return False
+        # Replacing the URL under a player that is already streaming does not work on this
+        # firmware: measured in the field, a radio 68 minutes into /lara_10318e was sent
+        # `strm-s` for /all and simply stopped fetching — bytes_received frozen, in_buf from
+        # 126 KB to nothing, no sound. A real Slim server terminates the current stream first,
+        # and so do we now. Both commands go out back to back on the same connection, in order,
+        # so this costs no time and adds no waiting to a path we would rather keep short.
+        if p.current_mount is not None and p.current_mount != mount:
+            log.info("LARA %s is switching from /%s to /%s — stopping the old stream first",
+                     mac, p.current_mount, mount)
+            await self._send(p, b"strm", _strm_body(b"q"))
         # Start the stall clock now. It measures the gap since the last byte arrived, and
         # after a long pause that gap is hours old — which is why a freshly switched-on
         # zone used to report 'has fetched nothing for 37269s' in the same second.

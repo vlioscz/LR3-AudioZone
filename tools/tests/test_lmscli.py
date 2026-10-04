@@ -77,6 +77,40 @@ assert not stall._stall_logged, "a radio that is not playing is not stalled"
 print("slimproto: a 'playing' LARA that fetches nothing is detected and logged")
 
 
+# A mount change must terminate the old stream first. Measured in the field: a radio 68 min
+# into /lara_10318e was sent strm-s for /all, stopped fetching altogether (bytes frozen, in_buf
+# 126 KB -> 0) and made no sound. Replacing the URL under a live player does not work here.
+_sent = []
+
+
+class _W:
+    def get_extra_info(self, _k): return ("10.0.0.9", 3483)
+    def write(self, d): _sent.append(d)
+    async def drain(self): pass
+    def close(self): pass
+
+
+async def _switch_check():
+    s2 = sp.SlimProtoServer("10.0.0.99", 8121, buffer_kb=64)
+    pl = sp.Player(MAC, 12, "ModelName=LARA,mp3", _W())
+    s2.players[MAC] = pl
+
+    def cmds():
+        return [("strm", chr(f[6])) for f in _sent if len(f) >= 7 and f[2:6] == b"strm"]
+
+    _sent.clear(); await s2.push_stream(MAC, "lara_a")
+    assert ("strm", "q") not in cmds(), cmds()
+    _sent.clear(); await s2.push_stream(MAC, "all")
+    c = cmds()
+    assert c.index(("strm", "q")) < c.index(("strm", "s")), c
+    _sent.clear(); await s2.push_stream(MAC, "all")
+    assert ("strm", "q") not in cmds(), "re-pushing the same mount must not stop it"
+    print("slimproto: a mount change stops the old stream first; a re-push does not")
+
+
+asyncio.run(_switch_check())
+
+
 class FakeSlim:
     def __init__(self): self.players = {MAC: p}; self.calls = []
     def stream_url(self, m): return f"http://10.0.0.99:8121/{m}"
