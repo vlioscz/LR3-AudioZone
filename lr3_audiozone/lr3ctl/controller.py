@@ -63,6 +63,12 @@ STOP_ECHO_GRACE = 6.0
 # After an underrun the LARA stops playing but keeps the control connection, so `target` still
 # says "playing" and nothing ever re-pushes. Re-push, but not more often than this.
 REPUSH_COOLDOWN = 15.0
+# When a radio drops its SlimProto session we go and ask whether the unit is still alive at
+# all. Three TCP handshakes per port, spread over two minutes, then we stop — a wedged radio
+# costs nothing to probe and a healthy one must not be hammered.
+LIVENESS_PROBES = (5.0, 30.0, 120.0)   # seconds after the drop
+WEB_PORT = 80
+ELKO_PORT = 61695
 # How often to repeat the warning that control_mode=off is swallowing playback.
 MUZZLE_NAG_EVERY = 600.0
 
@@ -499,7 +505,44 @@ class Controller:
         if self._loop:
             self._loop.create_task(self.tick())
 
+    async def probe_after_disconnect(self, mac: str, ip: str):
+        """Answer, in the log, the one question nobody has been able to answer by hand.
+
+        Every freeze at site 5 ends the same way: the SlimProto session dies and some time
+        later somebody pulls the breaker. What has never been established is whether the unit
+        was still alive in between — a radio that still serves its web page has lost one task,
+        a radio that answers nothing has lost everything, and those point at different causes.
+        Asking the customer to check has failed three times, so the add-on checks itself.
+
+        Read-only: a TCP handshake on :80 and :61695, closed immediately, three times over two
+        minutes. That is nine connections against a device we otherwise heartbeat every 5 s.
+        """
+        if not ip:
+            return
+        waited = 0.0
+        for delay in LIVENESS_PROBES:
+            await asyncio.sleep(delay - waited)
+            waited = delay
+            if self.slim and mac in self.slim.players:
+                log.info("LARA %s is back on SlimProto — liveness probe stopped", mac)
+                return
+            web, ctl = await asyncio.gather(
+                asyncio.to_thread(discovery.port_open, ip, WEB_PORT),
+                asyncio.to_thread(discovery.port_open, ip, ELKO_PORT),
+            )
+            if web or ctl:
+                log.warning("LARA %s (%s) dropped its audio-zone session %.0fs ago but the unit "
+                            "is alive — web page %s, control port %s. One task died, not the box.",
+                            mac, ip, delay, "answers" if web else "silent",
+                            "answers" if ctl else "silent")
+            else:
+                log.warning("LARA %s (%s) answers nothing on :%d or :%d %.0fs after its session "
+                            "dropped — the whole unit is wedged, not just the audio zone.",
+                            mac, ip, WEB_PORT, ELKO_PORT, delay)
+
     def on_slim_disconnect(self, player):
+        if self._loop:
+            self._loop.create_task(self.probe_after_disconnect(player.mac, player.ip))
         self.target.pop(player.mac, None)
         self.idle_since.pop(player.mac, None)
         self._stopped_at.pop(player.mac, None)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2
+
+- **When a radio drops out, the add-on now checks by itself whether the unit is still alive**
+  and writes the answer in the log. Until now the only way to tell a radio that has lost just
+  its audio-zone connection from one that has locked up completely was for somebody to walk up
+  to it before pulling the breaker. The add-on now tries its web page and its control port a
+  few seconds, half a minute and two minutes after the drop, and says which it is. It stops
+  as soon as the radio comes back, and it is only a connection attempt — nothing is sent.
+
 ## 0.4.1
 
 - The first "playing" line in the log now appears about twenty seconds after a zone starts,

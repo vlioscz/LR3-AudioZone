@@ -106,16 +106,21 @@ def probe_tcp(ip: str, timeout: float = 1.5) -> dict | None:
     return rec
 
 
-def _port_open(ip: str, timeout: float) -> bool:
+def port_open(ip: str, port: int, timeout: float = 1.5) -> bool:
+    """Can we complete a TCP handshake on this port? Connect and close, nothing is sent."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
     try:
-        s.connect((ip, ep.CONTROL_PORT))
+        s.connect((ip, port))
         return True
     except OSError:
         return False
     finally:
         s.close()
+
+
+def _port_open(ip: str, timeout: float) -> bool:
+    return port_open(ip, ep.CONTROL_PORT, timeout)
 
 
 def scan_subnet(prefix: str, timeout: float = 0.6, workers: int = 64) -> dict:

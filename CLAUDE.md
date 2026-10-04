@@ -180,6 +180,42 @@ Consequences, and they matter:
   check it before treating the ceiling as fact. A *lower* threshold is honoured (CLAUDE.md's
   latency note: 64 KB → ~4.5 s lag, 36 KB → ~2 s), so the cap is a ceiling, not indifference.
 
+## Site 5 freeze statistics, 2026-08-13 → 2026-10-04 (one log, 7327 lines)
+
+Counted by SlimProto session drops and by CLI source ports restarting near 49152, which only
+happens when a unit reboots:
+
+| radio | session drops | power cycles |
+|---|---|---|
+| **KP2 / koup. patro (00:0a:59:f2:2c:3c)** | **20** | **4** |
+| Obývák (2c:6a:6f:10:3a:ce) | 4 | 2 |
+| koupelna dole (2c:6a:6f:10:3a:c6) | **1** | **0** |
+
+(Three further all-three-at-once reboots on 08-16 and 08-21 are site-wide power events, not
+freezes.) KP2 is the outlier on every measure, and it is also the only unit of the older
+hardware generation — OUI `00:0a:59` against `2c:6a:6f` for the other two.
+
+**The 2026-10-03 freeze, exactly:**
+
+```
+06:01:41  LARA 00:0a:59:f2:2c:3c reports volume=50
+06:01:42  CLI command from 00:0a:59:f2:2c:3c: stop
+06:01:42  CLI stop ... while its zone is off — recorded, nothing to do
+06:02:01  LARA 00:0a:59:f2:2c:3c disconnected
+06:30:36  LARA connected (CLI source port 49153 → it was power-cycled)
+```
+
+The add-on **sent it nothing** in that window — no push, no park, no recovery; it had not played
+since 09-30 and only the 5 s `strm-t` heartbeat was going out. The same
+`reports volume` → `stop` → session drops shape appears on 09-30, 10-01 and twice on 10-02, so
+it is the radio being *used* (someone changing source or volume on the unit), after which its
+audio-zone session ends — normally harmless, occasionally fatal.
+
+So the freeze is **not** caused by anything we send during playback, which rules out the whole
+family of theories built around pushes, parks and recovery. 0.4.2 adds the measurement that was
+missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
+whether the unit was still alive.
+
 ## Group → individual transitions (open, 2026-10-02)
 
 Hypothesis from the field: leaving **LARA All** for a radio's own zone is where a radio gets
