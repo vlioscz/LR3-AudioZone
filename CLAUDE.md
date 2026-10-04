@@ -160,6 +160,9 @@ Consequences, and they matter:
   to an *absolute* deadline (`t0 + frame_duration*ticks - time()`), so a late wake-up is paid
   back by the next one and error cannot accumulate. Two unrelated hosts also cannot agree on
   the same 39 B/s; one firmware can.
+- **Reported fixed in the field on 2026-10-02** ("problém s bufferem se zdá být vyřešen") after
+  0.4.1 went on the third-party 3-radio install. Not yet confirmed from a log: the proof is the
+  `playing:` lines holding `in_buf` level across half an hour, and that log has not been read.
 - **Fixed in 0.4.0 by moving the output to 48 kHz** (`samplerate`, default 48000). At 48 kHz an
   MP3 frame is exactly `144*bitrate/48000` bytes (576 at 192 kbps) with no padding bit, and
   48 kHz is what a standard 12.288 MHz audio crystal divides down to exactly, while 44.1 kHz
@@ -176,6 +179,30 @@ Consequences, and they matter:
   minutes in. Since 0.4.1 it comes ~20 s in, so the next log measures the initial fill directly;
   check it before treating the ceiling as fact. A *lower* threshold is honoured (CLAUDE.md's
   latency note: 64 KB → ~4.5 s lag, 36 KB → ~2 s), so the cap is a ceiling, not indifference.
+
+## Group → individual transitions (open, 2026-10-02)
+
+Hypothesis from the field: leaving **LARA All** for a radio's own zone is where a radio gets
+stuck fetching nothing. Two of the three observations offered for it are **not** evidence, and
+the third is:
+
+- `main_all → silence_all` is a **Liquidsoap fallback event on the /all mount**, not anything
+  the controller does. It fires when the "LARA All" librespot goes inactive. Its ordering
+  against our push is simply which librespot reported first; nothing overlaps in the controller.
+- A radio still reporting `/all` with a full buffer *after* the group went silent is **by
+  design**: nothing has told it to stop, the mount now carries silence, and `tick()` only calls
+  `zone_off` after `idle_timeout`. That is the idle branch, not a leaked stream.
+- **Real:** `push_stream` sends `aude 1 1` + `strm-s` and **never `strm-q`**, even when
+  `p.current_mount` is already set (slimproto.py). A mount change therefore overwrites the
+  stream in place, where a real LMS terminates/flushes first. Already raised in the September
+  adversarial review as P1 #14 and deliberately deferred ("adds a packet to the very teardown
+  path we suspect; ship only after the park is gone and the backoff is in"). The park is gone.
+
+⚠️ Do **not** implement the suggested "stop everything, wait for confirmation, then push" — that
+is more packets and more waiting on the path that is already suspect. The minimal change is a
+single `strm-q` immediately before `strm-s` when `current_mount` is set, which is what LMS does.
+**Wait for a log that contains the failure.** The 0.4.1 first `playing:` line lands ~20 s after a
+switch, so a radio that did not pick up shows `in_buf=0` with frozen bytes right there.
 
 **The zombie state.** After an underrun a radio can come back claiming to play while fetching
 nothing at all — `bytes_rx` frozen, `in_buf=0`, `elapsed` still climbing, no sound. Two radios
