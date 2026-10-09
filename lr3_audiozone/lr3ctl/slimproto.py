@@ -108,6 +108,7 @@ class Player:
         # Counts STAT frames. The controller uses it to tell a radio that has
         # stalled but is still answering from one that has gone silent for good.
         self.stat_seq = 0
+        self._seen_ops: set = set()   # frame kinds already reported for this player
 
     @property
     def name(self) -> str:
@@ -174,7 +175,17 @@ class SlimProtoServer:
                 elif op == b"BYE!":
                     break
                 else:
-                    log.debug("slim <- %r from %s (%d B)", op, peer, length)
+                    # Once per kind per session, at INFO. A radio that goes quiet in a way we
+                    # cannot see is how site 5 spent a day invisible: it kept the connection
+                    # alive with something, but sent no STAT we could parse, so the progress
+                    # lines stopped, `mode` froze and the underrun recovery silently switched
+                    # itself off. If it is talking to us, the log should say in what.
+                    if player is not None and op not in player._seen_ops:
+                        player._seen_ops.add(op)
+                        log.info("LARA %s sends %r frames (%d B) — not something we read; "
+                                 "noting it once", player.mac, op, length)
+                    else:
+                        log.debug("slim <- %r from %s (%d B)", op, peer, length)
         except asyncio.TimeoutError:
             log.warning("LARA %s sent nothing for %ds although it answers our heartbeat every "
                         "5s — treating the session as dead and closing it",
@@ -245,7 +256,14 @@ class SlimProtoServer:
             f = struct.unpack(_STAT_FMT_SHORT, data[:_STAT_LEN_SHORT])
         else:
             if len(data) >= 4:
-                log.debug("LARA %s runt STAT %r (%d B)", player.mac, data[:4], len(data))
+                tag = ("runt", data[:4])
+                if tag not in player._seen_ops:
+                    player._seen_ops.add(tag)
+                    log.info("LARA %s sends %r STAT frames of only %d bytes — too short to "
+                             "read, so its buffer and playing state stay invisible",
+                             player.mac, data[:4], len(data))
+                else:
+                    log.debug("LARA %s runt STAT %r (%d B)", player.mac, data[:4], len(data))
                 self._apply_event(player, data[:4])
             return
         player.stat_seq += 1

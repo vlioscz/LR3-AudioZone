@@ -81,6 +81,10 @@ ZONE_SETTLE = 3.0
 IDLE_TIMEOUT_FLOOR = 45
 # How often to ask Icecast how far behind the radios are. Same cadence as the progress lines.
 BACKLOG_EVERY = 300.0
+# A connected radio answers our 5 s heartbeat with a STAT. If its STAT counter stops moving
+# while the session is still open we are blind to it: no buffer figures, `mode` frozen, and
+# `recover_if_stalled` disabled, because that waits for a STAT after the stall. Say so.
+STAT_SILENCE = 120.0
 # When a radio drops its SlimProto session we go and ask whether the unit is still alive at
 # all. Three TCP handshakes per port, spread over two minutes, then we stop — a wedged radio
 # costs nothing to probe and a healthy one must not be hammered.
@@ -230,6 +234,8 @@ class Controller:
         self._backlog_prev: dict[str, tuple] = {}  # mount -> (read, sent, listeners)
         self._probes: set[asyncio.Task] = set()    # liveness probes in flight
         self._backlog_warned = False
+        self._stat_seen: dict[str, tuple] = {}     # mac -> (stat_seq, when it last moved)
+        self._blind: set[str] = set()              # macs we have already complained about
         self._stopping = False
         self.cred_cache_flag_ok = self.probe_cred_cache_flag()
 
@@ -705,6 +711,8 @@ class Controller:
         self.target.pop(player.mac, None)
         self.idle_since.pop(player.mac, None)
         self._stopped_at.pop(player.mac, None)
+        self._stat_seen.pop(player.mac, None)
+        self._blind.discard(player.mac)
         self._repushed_at.pop(player.mac, None)
 
     def on_slim_state(self, player, what: str):
@@ -831,6 +839,29 @@ class Controller:
         rec = self.radios.get(key, {}).get("rec", {})
         log.info("zone OFF %s (%s)", rec.get("name", key), rec.get("ip", "?"))
 
+    def warn_if_blind(self, key: str, now: float):
+        """Say when a radio is connected but has stopped telling us anything.
+
+        Site 5 ran for over a day like this: the session stayed open, music kept playing, and
+        every STAT-derived line in the log simply stopped. Nothing complained, because every
+        check we have is driven by the STATs that were missing — including the underrun
+        recovery, which waits for a STAT that never comes.
+        """
+        p = self.slim.players.get(key) if self.slim else None
+        if p is None:
+            return
+        last = self._stat_seen.get(key)
+        if last is None or last[0] != p.stat_seq:
+            self._stat_seen[key] = (p.stat_seq, now)
+            return
+        if now - last[1] < STAT_SILENCE or key in self._blind:
+            return
+        self._blind.add(key)
+        log.warning("LARA %s is still connected but has not sent a readable STAT for %.0fs — "
+                    "its buffer and playing state are invisible and underrun recovery cannot "
+                    "run. Restarting the add-on re-establishes the session.",
+                    key, now - last[1])
+
     async def recover_if_stalled(self, key: str, mount: str, now: float):
         """Push the stream again if the radio stopped playing but stayed connected.
 
@@ -893,6 +924,7 @@ class Controller:
                     # the timeout instantly. That is the zone switching off mid-album and
                     # coming straight back, over and over.
                     self.idle_since.pop(key, None)
+                    self.warn_if_blind(key, now)
                     await self.recover_if_stalled(key, mount, now)
                     await self.apply_volume(key)
                     self.update_now_playing(key, mount)

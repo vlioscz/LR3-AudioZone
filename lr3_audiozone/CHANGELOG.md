@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.9
+
+- **A radio that stops reporting itself is now visible in the log.** One of the radios at a
+  customer's site went quiet in a way nothing noticed: it stayed connected and kept playing,
+  but stopped sending the status messages everything else depends on. The result was over a
+  day with no buffer figures, no playing state, and the automatic recovery from dropouts
+  silently switched off — because it waits for a status message that never came. The add-on
+  now says so after two minutes, and also reports once what the radio *is* sending instead.
+
 ## 0.4.8
 
 - Stopping or restarting the add-on no longer leaves three `Task was destroyed but it is
