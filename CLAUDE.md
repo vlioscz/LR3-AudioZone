@@ -224,6 +224,29 @@ family of theories built around pushes, parks and recovery. 0.4.2 adds the measu
 missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
 whether the unit was still alive.
 
+## The lag that grows over a session (open, measurement added in 0.4.7)
+
+Reported from the third-party install: after ~an hour of playing, switching took about 30 s;
+stopping and starting cleared it and it was instant again. **This is NOT the site 5 problem** —
+that install had no queue failures and zero underruns at the time, so it is not librespot
+losing its context. It is pure accumulated lag, and it resets with a new listener connection.
+
+Arithmetic that fits: `icecast.xml.tpl` sets `<queue-size>524288</queue-size>`, i.e. **21.3 s**
+at 192 kbps, which is the most Icecast will let a listener fall behind. Add the radio's own
+~5.4 s and Liquidsoap's 0.4 s and the ceiling is ~27 s. A new connection starts with an empty
+queue, which is why stop/start fixes it.
+
+⚠️ **Do not "fix" this by lowering `queue-size`.** If there is a real surplus, a smaller queue
+does not remove it — Icecast drops the listener once the queue fills, turning a latency problem
+into a dropout every few minutes. Find out whether the surplus is real first.
+
+0.4.7 measures it: per mount, the **change** in (bytes read from the source − bytes sent to
+listeners) between two polls of Icecast's admin stats. The absolute difference is meaningless
+because the listener joins after the source, but its rate of change is exactly the surplus.
+A log line every five minutes gives B/s and seconds-of-audio per hour. If it reads ~0 once the
+buffer has filled, the lag is a one-off fill and only `idle_timeout` matters; if it stays
+positive, there is a rate mismatch to engineer away.
+
 ## ⚠️ `idle_timeout` must exceed the pipeline lag, or songs get cut off
 
 `zone_off` ends with `strm-q`, and this firmware answers `STMf` — it **flushes** everything it

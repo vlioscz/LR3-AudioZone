@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.7
+
+- **The log now measures how far behind the radios are getting.** After a long listening
+  session a radio can end up tens of seconds behind the app — noticeable when you switch
+  rooms, and cleared by stopping and starting playback. Part of that lag builds up inside
+  the streaming server where nothing could see it. Every five minutes the add-on now reports
+  whether that backlog is growing, and by how many seconds of audio per hour. No behaviour
+  change; this is the measurement needed before the lag can sensibly be fixed.
+
 ## 0.4.6
 
 - **A short idle timeout cuts the ends off songs — the add-on now says so.** Switching a zone

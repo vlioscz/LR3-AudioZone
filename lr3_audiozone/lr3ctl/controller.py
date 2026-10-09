@@ -22,6 +22,7 @@ control_mode: `slimproto` (default) or `off` (stream only, never touch the radio
 from __future__ import annotations
 
 import asyncio
+import base64
 import glob
 import json
 import logging
@@ -29,6 +30,8 @@ import os
 import signal
 import socket
 import subprocess
+import urllib.request
+import xml.etree.ElementTree as ET
 import sys
 import time
 
@@ -76,6 +79,8 @@ ZONE_SETTLE = 3.0
 # away the tail of whatever was playing, which is heard as songs being cut off before they
 # end. Warn below this; it is not a hard limit because a short timeout is useful for testing.
 IDLE_TIMEOUT_FLOOR = 45
+# How often to ask Icecast how far behind the radios are. Same cadence as the progress lines.
+BACKLOG_EVERY = 300.0
 # When a radio drops its SlimProto session we go and ask whether the unit is still alive at
 # all. Three TCP handshakes per port, spread over two minutes, then we stop — a wedged radio
 # costs nothing to probe and a healthy one must not be hammered.
@@ -221,6 +226,8 @@ class Controller:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._warned_offline: set[str] = set()
         self._log_offsets: dict[str, int] = {}     # mount -> bytes of its librespot log copied
+        self._backlog_at = 0.0                     # last Icecast stats poll
+        self._backlog_prev: dict[str, tuple] = {}  # mount -> (read, sent, listeners)
         self.cred_cache_flag_ok = self.probe_cred_cache_flag()
 
     # --- inventory -------------------------------------------------------------
@@ -561,6 +568,58 @@ class Controller:
                     "switched. Set 'Ovládání LARA' back to 'slimproto' and restart the add-on.",
                     ", ".join(active))
 
+    def measure_backlog(self):
+        """Measure the one part of the lag we have only ever guessed at.
+
+        The listener is behind the app by: Liquidsoap's 0.4 s, whatever Icecast is holding for
+        that listener, and the radio's own buffer (~5.4 s at 192 kbps now that it stays full).
+        The middle term is invisible from both ends and is the one that grows — a colleague
+        reported ~30 s after an hour of listening, cleared by stopping and starting.
+
+        Icecast's admin stats give, per mount, the bytes read from the source and the bytes
+        sent to listeners. Their absolute difference is meaningless (the listener joined after
+        the source did), but the **change** in that difference over time is exactly the rate
+        at which the backlog is growing. That is the number that decides whether this is a
+        real surplus to be engineered away or a one-off fill that settles.
+        """
+        now = time.monotonic()
+        if now - self._backlog_at < BACKLOG_EVERY:
+            return
+        was, self._backlog_at = self._backlog_at, now
+        try:
+            req = urllib.request.Request(
+                f"http://localhost:{self.port}/admin/stats.xml",
+                headers={"Authorization": "Basic " + base64.b64encode(
+                    f"admin:{self.source_password}".encode()).decode()})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                root = ET.fromstring(r.read())
+        except Exception as e:
+            log.debug("could not read Icecast stats: %s", e)
+            return
+        dt = now - was
+        for src in root.findall("source"):
+            mount = (src.get("mount") or "").lstrip("/")
+            if mount not in self.zone_names:
+                continue
+            def num(tag):
+                el = src.find(tag)
+                try:
+                    return int(el.text)
+                except (AttributeError, TypeError, ValueError):
+                    return None
+            read, sent, lis = num("total_bytes_read"), num("total_bytes_sent"), num("listeners")
+            if read is None or sent is None or not lis:
+                continue
+            prev = self._backlog_prev.get(mount)
+            self._backlog_prev[mount] = (read, sent, lis)
+            if not prev or prev[2] != lis or dt <= 0:
+                continue        # listener count changed: the comparison is not like for like
+            grew = (read - prev[0]) - (sent - prev[1]) / lis
+            per_s = grew / dt
+            log.info("mount /%s: Icecast backlog %+.0f B/s (%+.1f s of audio per hour, "
+                     "%d listener(s))", mount, per_s,
+                     per_s * 3600 / max(1, self.bitrate * 1000 / 8), lis)
+
     async def supervise_zones(self):
         """Restart a pipeline whose Liquidsoap died — otherwise that device vanishes silently."""
         for zone in self.zones:
@@ -892,6 +951,10 @@ class Controller:
                     self.pump_librespot_logs()
                 except Exception:
                     log.exception("copying the librespot logs failed")
+                try:
+                    self.measure_backlog()
+                except Exception:
+                    log.exception("measuring the Icecast backlog failed")
                 if self.mode == "slimproto":
                     try:
                         await self.tick()
