@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.8
+
+- Stopping or restarting the add-on no longer leaves three `Task was destroyed but it is
+  pending!` errors in the log. They came from the checks 0.4.2 runs on a radio that drops out:
+  every radio drops out when the add-on stops, so every shutdown logged errors about a
+  perfectly clean stop.
+- If the add-on cannot reach the streaming server's statistics, it now says so once instead of
+  staying quiet — otherwise the backlog measurement added in 0.4.7 could simply never appear
+  and nobody would know why.
+
 ## 0.4.7
 
 - **The log now measures how far behind the radios are getting.** After a long listening

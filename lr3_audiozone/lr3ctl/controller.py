@@ -228,6 +228,9 @@ class Controller:
         self._log_offsets: dict[str, int] = {}     # mount -> bytes of its librespot log copied
         self._backlog_at = 0.0                     # last Icecast stats poll
         self._backlog_prev: dict[str, tuple] = {}  # mount -> (read, sent, listeners)
+        self._probes: set[asyncio.Task] = set()    # liveness probes in flight
+        self._backlog_warned = False
+        self._stopping = False
         self.cred_cache_flag_ok = self.probe_cred_cache_flag()
 
     # --- inventory -------------------------------------------------------------
@@ -594,7 +597,10 @@ class Controller:
             with urllib.request.urlopen(req, timeout=5) as r:
                 root = ET.fromstring(r.read())
         except Exception as e:
-            log.debug("could not read Icecast stats: %s", e)
+            if not self._backlog_warned:
+                self._backlog_warned = True
+                log.warning("cannot read Icecast stats at http://localhost:%d/admin/stats.xml "
+                            "(%s) — the backlog measurement will stay silent", self.port, e)
             return
         dt = now - was
         for src in root.findall("source"):
@@ -688,8 +694,14 @@ class Controller:
                             mac, ip, WEB_PORT, ELKO_PORT, delay)
 
     def on_slim_disconnect(self, player):
-        if self._loop:
-            self._loop.create_task(self.probe_after_disconnect(player.mac, player.ip))
+        # Not while shutting down: every radio disconnects at that moment, and a probe that
+        # outlives the loop is three "Task was destroyed but it is pending!" errors in the log
+        # of an otherwise clean stop — which is exactly the kind of noise that wastes an hour
+        # the next time something real goes wrong.
+        if self._loop and not self._stopping:
+            t = self._loop.create_task(self.probe_after_disconnect(player.mac, player.ip))
+            self._probes.add(t)
+            t.add_done_callback(self._probes.discard)
         self.target.pop(player.mac, None)
         self.idle_since.pop(player.mac, None)
         self._stopped_at.pop(player.mac, None)
@@ -967,6 +979,9 @@ class Controller:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            self._stopping = True
+            for t in list(self._probes):
+                t.cancel()
             await self.stop_zones()
 
 
