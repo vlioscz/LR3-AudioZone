@@ -94,6 +94,34 @@ ELKO_PORT = 61695
 # How often to repeat the warning that control_mode=off is swallowing playback.
 MUZZLE_NAG_EVERY = 600.0
 
+# --- rate_match: sending at the radio's pace instead of the CPU clock's (pacer.py) ------------
+PACER = "/opt/lr3ctl/pacer.py"
+RATE_MATCH_AUTO = True    # what `rate_match: auto` means in this release
+# Where a newly seen mount starts, by output sample rate, before the buffer readings take over.
+# Measured, not guessed: at 48 kHz the radios took ~78 B/s less than the 24 000 B/s we send
+# (2026-10-09, two radios, two hours, 22 readings); at 44.1 kHz they took ~39 B/s more
+# (2026-09-30, three radios). Positive = send faster.
+DEFAULT_PPM = {48000: -3250.0, 44100: 1640.0}
+RATE_EVERY = 5.0          # one steering decision per heartbeat, which is how often STATs come
+RATE_FRESH = 15.0         # a buffer reading older than this is not used
+# Aim the radio's own buffer this far below full. A full buffer is the one state we cannot
+# read: the radio stops pulling, and every further byte of surplus goes into Icecast unseen.
+RATE_HEADROOM = 20480
+# Gains. In ppm per byte of error: with the buffer 4 KB off target we lean 1000 ppm, which at
+# 24 kB/s moves it ~24 B/s — a time constant of about three minutes, slow enough that the
+# few-KB jitter in single readings does nothing audible and fast enough to settle a start.
+RATE_KP = 0.25
+RATE_TI = 1800.0          # the learned base rate follows the error on a half-hour scale
+# A hard bound either side of zero. The measured offsets are -3250 and +1640 ppm; anything
+# far past them means the readings are not what we think, and then the damage stays small.
+RATE_LIMIT = 8000.0
+RATE_SAVE_EVERY = 600.0
+
+# --- Home Assistant sensors (one per radio: which Spotify device it is playing) -------------
+HA_API = "http://supervisor/core/api"
+HA_REFRESH = 300.0        # re-post everything this often: HA forgets API-set states on restart
+HA_RETRY = 60.0
+
 
 def opt(cfg, key, default):
     v = cfg.get(key, default)
@@ -209,6 +237,16 @@ class Controller:
         # CLAUDE.md records 20 KB underrunning within seconds.
         self.buffer_seconds = max(0.2, float(opt(cfg, "buffer_seconds", 2.7)))
         self.buffer_kb = max(8, int(self.bitrate / 8 * self.buffer_seconds))
+        # auto = whatever this release recommends, so that a later release can change the
+        # recommendation; HA keeps a saved true/false for ever, which is why this is not a bool.
+        rm = str(opt(cfg, "rate_match", "auto")).lower()
+        self.rate_match = rm == "on" or (rm == "auto" and RATE_MATCH_AUTO)
+        self.rate_base: dict[str, float] = {}      # mount -> learned rate, ppm
+        self.rate_ppm: dict[str, float] = {}       # mount -> rate in force, ppm
+        self._rate_written: dict[str, float] = {}  # mount -> last value written for its pacer
+        self._rate_x: dict[str, float] = {}        # mount -> smoothed buffer reading, bytes
+        self._rate_at = 0.0
+        self._rate_saved_at = 0.0
         self.cli_port = int(opt(cfg, "cli_port", DEFAULT_CLI_PORT))
         self.cli_user = opt(cfg, "cli_username", "")
         self.cli_pass = opt(cfg, "cli_password", "")
@@ -220,7 +258,7 @@ class Controller:
         self.target: dict[str, str | None] = {}    # mac -> mount currently pushed
         self.idle_since: dict[str, float] = {}     # mac -> when its zone went idle
         self._stopped_at: dict[str, float] = {}    # mac -> when WE last sent it a stop
-        self._repushed_at: dict[str, float] = {}   # mac -> when we last recovered an underrun
+        self._repushed_at: dict[str, float] = {}   # mac -> when we last pushed it a stream
         self._stall_seq: dict[str, int] = {}       # mac -> its STAT count when it stalled
         self._zone_pending: dict[str, tuple] = {}  # mac -> (mount it wants, since when)
         self._muzzle_warned_at = -1e9              # last control_mode=off nag
@@ -237,6 +275,14 @@ class Controller:
         self._stat_seen: dict[str, tuple] = {}     # mac -> (stat_seq, when it last moved)
         self._blind: set[str] = set()              # macs we have already complained about
         self._stopping = False
+        # Home Assistant sensors. The Supervisor hands every add-on a token; with
+        # `homeassistant_api: true` in config.yaml it also opens the Core API to it.
+        self.ha_token = os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN")
+        self._ha_sent: dict[str, tuple] = {}       # entity -> (state, attrs) HA last accepted
+        self._ha_refresh_at = 0.0
+        self._ha_retry_at = 0.0
+        self._ha_failing = False
+        self._ha_task: asyncio.Task | None = None
         self.cred_cache_flag_ok = self.probe_cred_cache_flag()
 
     # --- inventory -------------------------------------------------------------
@@ -299,8 +345,16 @@ class Controller:
         self.zones = zones
         self.zone_names = {z.mount: z.name for z in zones}
         for z in zones:
-            log.info("zone /%s  ->  Spotify device %r  (%s)", z.mount, z.name,
-                     "všechna rádia" if z.is_group else z.radios[0])
+            # Name every member. This used to print only the first radio's MAC, so a two-room
+            # group read as a single radio — which is how it looked in a colleague's log while
+            # he was trying to work out why his groups behaved as they did.
+            if z.is_group:
+                who = "všechna rádia"
+            elif len(z.radios) == 1:
+                who = z.radios[0]
+            else:
+                who = ", ".join(self.display_name(self.radios[m]["rec"], m) for m in z.radios)
+            log.info("zone /%s  ->  Spotify device %r  (%s)", z.mount, z.name, who)
 
     def custom_group_zones(self, by_name: dict[str, str]) -> list[Zone]:
         """Extra Spotify devices for hand-picked sets of radios (`groups`).
@@ -391,13 +445,19 @@ class Controller:
         `sh -c` line, and an unquoted space would split one argument into two and make
         librespot exit on a usage error — a zone that is silent for ever.
         """
-        args = [f'--system-cache "{login_cache_dir(mount)}"']
+        argv = self.librespot_cache_argv(mount)
+        return " ".join(f'"{a}"' if i and argv[i - 1] in ("--system-cache", "--cache") else a
+                        for i, a in enumerate(argv))
+
+    def librespot_cache_argv(self, mount: str) -> list[str]:
+        """The same flags as a list, for the pacer, which starts librespot without a shell."""
+        args = ["--system-cache", login_cache_dir(mount)]
         if self.audio_cache_mb > 0:
-            args += [f'--cache "{audio_cache_dir(mount)}"',
-                     f"--cache-size-limit {self.audio_cache_mb}M"]
+            args += ["--cache", audio_cache_dir(mount),
+                     "--cache-size-limit", f"{self.audio_cache_mb}M"]
         if not self.remote_access and self.cred_cache_flag_ok:
             args.append("--disable-credential-cache")
-        return " ".join(args)
+        return args
 
     def purge_stored_logins(self) -> int:
         """Delete every stored Spotify login under /data, not just this boot's zones.
@@ -498,6 +558,138 @@ class Controller:
             f.write(tpl)
         return path
 
+    def librespot_argv(self, zone: Zone) -> list[str]:
+        """radio.liq.tpl's librespot line, as a list: a zone name is a name, never shell."""
+        return (["librespot", "--name", zone.name, "--device-type", "speaker",
+                 "--backend", "pipe", "--format", "S16",
+                 "--bitrate", str(self.spotify_bitrate),
+                 "--initial-volume", str(self.initial_volume())]
+                + self.librespot_cache_argv(zone.mount)
+                + ["--enable-volume-normalisation", "--onevent", "/etc/lr3/spotify_event.sh"])
+
+    def write_pacer_config(self, zone: Zone) -> str:
+        ppm = self.rate_ppm.setdefault(
+            zone.mount, self.rate_base.setdefault(zone.mount, self.default_ppm()))
+        self.write_rate(zone.mount, ppm, force=True)
+        cfg = {"mount": zone.mount, "name": zone.name, "port": self.port,
+               "source_password": self.source_password, "bitrate": self.bitrate,
+               "samplerate": self.samplerate, "librespot": self.librespot_argv(zone),
+               "librespot_log": os.path.join(STATE_DIR, f"librespot_{zone.mount}.log"),
+               "rate_file": self.rate_path(zone.mount), "initial_ppm": ppm}
+        path = os.path.join(STATE_DIR, f"pacer_{zone.mount}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+        return path
+
+    # --- rate_match: keep each radio's buffer just below full -----------------------
+    def default_ppm(self) -> float:
+        return DEFAULT_PPM.get(self.samplerate, 0.0)
+
+    @staticmethod
+    def rate_path(mount: str) -> str:
+        return os.path.join(STATE_DIR, f"lr3_rate_{mount}")
+
+    def write_rate(self, mount: str, ppm: float, force: bool = False):
+        if not force and abs(ppm - self._rate_written.get(mount, 1e9)) < 2.0:
+            return
+        path = self.rate_path(mount)
+        try:
+            with open(path + ".tmp", "w") as f:
+                f.write(f"{ppm:.1f}\n")
+            os.replace(path + ".tmp", path)
+            self._rate_written[mount] = ppm
+        except OSError:
+            log.exception("could not write the rate for /%s", mount)
+
+    def rate_target(self, size: int) -> float:
+        """Where to hold a radio's buffer: comfortably full, never quite full.
+
+        The start threshold is a floor so we never steer a radio below where it began; in
+        practice it does not bind, because this firmware starts at ~60 KB whatever it is told.
+        """
+        target = max(size - RATE_HEADROOM, self.buffer_kb * 1024 + 8192)
+        return min(target, size - 4096)
+
+    def load_rates(self):
+        """Start from what this site's radios taught us last time, not from the default.
+
+        Only when the output sample rate is unchanged: the radios' offset is a property of the
+        rate they are fed (opposite signs at 44.1 and 48 kHz), so an old value would be wrong.
+        """
+        try:
+            with open(os.path.join(DATA_DIR, "rate_ppm.json")) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return
+        if saved.get("samplerate") != self.samplerate or saved.get("bitrate") != self.bitrate:
+            return
+        for mount, ppm in (saved.get("ppm") or {}).items():
+            try:
+                self.rate_base[mount] = max(-RATE_LIMIT, min(RATE_LIMIT, float(ppm)))
+            except (TypeError, ValueError):
+                pass
+        if self.rate_base:
+            log.info("rate_match: starting from the rates learned last time — %s",
+                     ", ".join(f"/{m} {p:+.0f} ppm" for m, p in sorted(self.rate_base.items())))
+
+    def save_rates(self):
+        if not self.rate_base:
+            return
+        try:
+            path = os.path.join(DATA_DIR, "rate_ppm.json")
+            with open(path + ".tmp", "w") as f:
+                json.dump({"samplerate": self.samplerate, "bitrate": self.bitrate,
+                           "ppm": {m: round(p, 1) for m, p in self.rate_base.items()}}, f)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            log.exception("could not save the learned rates")
+
+    def update_rates(self, now: float):
+        """Steer each zone's pacer so its radios neither starve nor overflow.
+
+        The LARA reports its input-buffer level in every STAT, every 5 s. If we send faster than
+        it plays, the level climbs; slower, it sinks. So hold it at `rate_target` with a slow PI
+        loop: the proportional part answers the reading, the integral part (`rate_base`) learns
+        the radio's true offset and is saved, so the next start begins where this one ended.
+
+        On a shared mount (a group) the hungriest radio decides: running one dry is a dropout,
+        whereas a radio that plays a few ppm slower than its partners just fills up and sheds
+        the excess through Icecast's queue, as every radio did before this existed.
+
+        Nothing here sends anything to a radio. It only changes how fast we read Spotify.
+        """
+        if not self.rate_match or not self.slim or now - self._rate_at < RATE_EVERY:
+            return
+        dt = min(now - self._rate_at, 3 * RATE_EVERY) if self._rate_at else RATE_EVERY
+        self._rate_at = now
+        for zone in self.zones:
+            m = zone.mount
+            readings = []
+            for mac, mount in self.target.items():
+                p = self.slim.players.get(mac) if mount == m else None
+                if (p is None or p.mode != "play" or p._stall_logged or not p.buf_size
+                        or now - p.in_buf_at > RATE_FRESH):
+                    continue
+                readings.append((p.in_buf, p.buf_size))
+            if not readings:
+                self._rate_x.pop(m, None)     # nothing to steer by: hold the rate as it is
+                continue
+            raw = min(r[0] for r in readings)
+            size = min(r[1] for r in readings)
+            x = self._rate_x.get(m)
+            x = raw if x is None else x + 0.3 * (raw - x)
+            self._rate_x[m] = x
+            e = x - self.rate_target(size)
+            base = self.rate_base.get(m, self.default_ppm()) - RATE_KP / RATE_TI * e * dt
+            base = max(-RATE_LIMIT, min(RATE_LIMIT, base))
+            ppm = max(-RATE_LIMIT, min(RATE_LIMIT, base - RATE_KP * e))
+            self.rate_base[m] = base
+            self.rate_ppm[m] = ppm
+            self.write_rate(m, ppm)
+        if now - self._rate_saved_at >= RATE_SAVE_EVERY:
+            self._rate_saved_at = now
+            self.save_rates()
+
     async def start_zone(self, zone: Zone):
         try:
             os.makedirs(audio_cache_dir(zone.mount), exist_ok=True)
@@ -509,12 +701,16 @@ class Controller:
                           zone.mount, DATA_DIR)
         self.prepare_credentials(zone.mount)
         open(os.path.join(STATE_DIR, f"librespot_{zone.mount}.log"), "a").close()
-        path = self.render_liq(zone)
+        if self.rate_match:
+            path = self.write_pacer_config(zone)
+            what, argv = "the pacer", ("python3", PACER, path)
+        else:
+            what, argv = "Liquidsoap", ("liquidsoap", self.render_liq(zone))
         try:
-            self.procs[zone.mount] = await asyncio.create_subprocess_exec("liquidsoap", path)
+            self.procs[zone.mount] = await asyncio.create_subprocess_exec(*argv)
             log.info("zone /%s started (Spotify device %r)", zone.mount, zone.name)
         except Exception:
-            log.exception("could not start Liquidsoap for zone /%s", zone.mount)
+            log.exception("could not start %s for zone /%s", what, zone.mount)
 
     def pump_librespot_logs(self):
         """Copy librespot's own stderr into the add-on log.
@@ -628,16 +824,23 @@ class Controller:
                 continue        # listener count changed: the comparison is not like for like
             grew = (read - prev[0]) - (sent - prev[1]) / lis
             per_s = grew / dt
+            # With rate_match on, this line is the proof it works: the backlog should read ~0
+            # for hours, with the radio's buffer parked just under full.
+            steer = ""
+            if self.rate_match and mount in self.rate_ppm:
+                x = self._rate_x.get(mount)
+                steer = (f"; pacing {self.rate_ppm[mount]:+.0f} ppm" +
+                         (f", radio buffer {x / 1024:.0f} KB" if x is not None else ""))
             log.info("mount /%s: Icecast backlog %+.0f B/s (%+.1f s of audio per hour, "
-                     "%d listener(s))", mount, per_s,
-                     per_s * 3600 / max(1, self.bitrate * 1000 / 8), lis)
+                     "%d listener(s))%s", mount, per_s,
+                     per_s * 3600 / max(1, self.bitrate * 1000 / 8), lis, steer)
 
     async def supervise_zones(self):
         """Restart a pipeline whose Liquidsoap died — otherwise that device vanishes silently."""
         for zone in self.zones:
             proc = self.procs.get(zone.mount)
             if proc is not None and proc.returncode is not None:
-                log.warning("Liquidsoap for zone /%s exited (%s) — restarting",
+                log.warning("the audio pipeline for zone /%s exited (%s) — restarting",
                             zone.mount, proc.returncode)
                 self.procs.pop(zone.mount, None)
                 await self.start_zone(zone)
@@ -789,6 +992,13 @@ class Controller:
         await self.apply_volume(key)
         self.idle_since.pop(key, None)
         self.target[key] = mount
+        # Every push starts the re-push cooldown, not just a recovery. Switching mounts sends
+        # `strm-q` first, the radio answers STMf ("stopped") and stays in that mode until its
+        # new stream starts a few seconds later — which recover_if_stalled read as an underrun
+        # and answered with a second push. 6 of 19 switches in one log, each one re-buffering
+        # the radio a second time: part of why changing rooms felt slow.
+        self._repushed_at[key] = time.monotonic()
+        self._stall_seq.pop(key, None)
         rec = self.radios.get(key, {}).get("rec", {})
         log.info("zone ON  %s (%s) -> /%s [%s]", rec.get("name", key), rec.get("ip", "?"),
                  mount, self.zone_names.get(mount, mount))
@@ -877,6 +1087,10 @@ class Controller:
         if p.mode != "stop":
             self._stall_seq.pop(key, None)
             return
+        # Note where its STAT counter stood the moment it stopped, even inside the cooldown —
+        # otherwise a stop that lands just after a push would need yet another STAT once the
+        # cooldown ends, for no reason.
+        seen = self._stall_seq.setdefault(key, p.stat_seq)
         if now - self._repushed_at.get(key, -1e9) < REPUSH_COOLDOWN:
             return
         # Only push into a radio that is still talking to us. On 2026-09-23 a LARA reported one
@@ -887,7 +1101,6 @@ class Controller:
         # for another connection. So: note where the STAT counter stood when it stalled, and
         # push only once a later STAT proves it is still alive. Costs a few seconds of silence
         # in the healthy case; in the fatal one it sends nothing at all.
-        seen = self._stall_seq.setdefault(key, p.stat_seq)
         if p.stat_seq <= seen:
             return
         self._stall_seq.pop(key, None)
@@ -907,6 +1120,98 @@ class Controller:
             p.title, p.artist = title, artist
             log.info("now playing on %s: %s — %s", key, title or "?", artist or "?")
             self.on_slim_state(p, "play")
+
+    # --- Home Assistant sensors ---------------------------------------------------
+    @staticmethod
+    def sensor_id(mac: str) -> str:
+        return "sensor.lr3_lara_" + mac.replace(":", "").lower()[-6:]
+
+    def sensor_states(self) -> dict[str, tuple[str, dict]]:
+        """One sensor per radio: the name of the Spotify device it is playing, or "off".
+
+        Read-only, and deliberately plain so Home Assistant can act on it. The case that asked
+        for it: a terrace with three speakers on one LARA, two of them behind relays, where the
+        Spotify device you pick should decide which speakers come on. The state follows the
+        *radio*, not Spotify — it changes when we push the radio a stream and returns to "off"
+        when its zone is switched off — so a relay never flips under music still coming out of
+        the radio's buffer.
+        """
+        active = {z.mount for z in self.zones if spotify_active(z.mount)}
+        out = {}
+        for mac, r in self.radios.items():
+            rec = r["rec"]
+            radio = self.display_name(rec, mac)
+            mount = self.target.get(mac)
+            out[self.sensor_id(mac)] = (
+                self.zone_names.get(mount, mount) if mount else "off",
+                {"friendly_name": f"{radio} – Spotify",
+                 "icon": "mdi:speaker" if mount else "mdi:speaker-off",
+                 "radio": radio, "mac": mac, "ip": rec.get("ip") or "",
+                 "mount": mount or "", "spotify": "playing" if mount in active else "idle"})
+        return out
+
+    def post_state(self, entity: str, state: str, attrs: dict):
+        """Blocking — run it in a thread. The heartbeat to every radio lives on this loop."""
+        req = urllib.request.Request(
+            f"{HA_API}/states/{entity}", method="POST",
+            data=json.dumps({"state": state, "attributes": attrs}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.ha_token}",
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            r.read()
+
+    async def publish_sensors(self, now: float):
+        """Post what changed; re-post everything every few minutes (HA forgets on restart)."""
+        if not self.ha_token or (self._ha_task and not self._ha_task.done()):
+            return
+        if self._ha_failing and now < self._ha_retry_at:
+            return
+        want = self.sensor_states()
+        refresh = now >= self._ha_refresh_at
+        todo = {e: v for e, v in want.items() if refresh or self._ha_sent.get(e) != v}
+        if todo:
+            self._ha_task = asyncio.create_task(self._push_sensors(todo, now, refresh))
+
+    async def _push_sensors(self, todo: dict, now: float, refresh: bool):
+        first = not self._ha_sent
+        try:
+            for entity, (state, attrs) in todo.items():
+                await asyncio.to_thread(self.post_state, entity, state, attrs)
+                self._ha_sent[entity] = (state, attrs)
+        except Exception as e:
+            self._ha_retry_at = time.monotonic() + HA_RETRY
+            if not self._ha_failing:
+                self._ha_failing = True
+                log.warning("cannot update the Home Assistant sensors (%s) — retrying every "
+                            "%.0fs; playback is not affected", e, HA_RETRY)
+            return
+        if refresh:
+            self._ha_refresh_at = now + HA_REFRESH
+        if self._ha_failing:
+            self._ha_failing = False
+            log.info("the Home Assistant sensors are being updated again")
+        if first:
+            log.info("Home Assistant sensors: %s",
+                     ", ".join(f"{e} ({a['radio']})" for e, (_, a) in sorted(todo.items())))
+
+    async def retire_sensors(self):
+        """On the way out, say so — a relay should not hold on to a zone that no longer runs."""
+        if self._ha_task and not self._ha_task.done():
+            self._ha_task.cancel()
+            try:
+                await self._ha_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if not self.ha_token or not self._ha_sent:
+            return
+
+        async def go():
+            for entity, (_, attrs) in list(self._ha_sent.items()):
+                await asyncio.to_thread(self.post_state, entity, "unavailable", attrs)
+        try:
+            await asyncio.wait_for(go(), 3)
+        except (asyncio.TimeoutError, Exception):
+            pass
 
     async def tick(self):
         active = {z.mount for z in self.zones if spotify_active(z.mount)}
@@ -960,6 +1265,17 @@ class Controller:
         else:
             log.info("Spotify remote access is OFF — zones are offered to everyone on this "
                      "network and to nobody outside it; no Spotify login is stored")
+        if self.rate_match:
+            self.load_rates()
+            log.info("rate_match is on — each zone is sent at its radios' own pace (from %+.0f "
+                     "ppm at %d Hz), so the lag no longer grows during a long session",
+                     self.default_ppm(), self.samplerate)
+        else:
+            log.info("rate_match is off — Liquidsoap sends in exact real time; at %d Hz the "
+                     "radios run %+.0f ppm off that, which builds up as lag",
+                     self.samplerate, self.default_ppm())
+        if not self.ha_token:
+            log.info("no Supervisor token — the Home Assistant sensors are disabled")
         if not self.remote_access:
             if not self.cred_cache_flag_ok:
                 log.warning("this librespot does not know --disable-credential-cache, so it "
@@ -1004,8 +1320,16 @@ class Controller:
                         await self.tick()
                     except Exception:
                         log.exception("route tick failed")
+                    try:
+                        self.update_rates(time.monotonic())
+                    except Exception:
+                        log.exception("steering the zone rates failed")
                 else:
                     self.nag_if_muzzled()
+                try:
+                    await self.publish_sensors(time.monotonic())
+                except Exception:
+                    log.exception("updating the Home Assistant sensors failed")
                 try:
                     await asyncio.wait_for(stopping.wait(), timeout=1.0)
                 except asyncio.TimeoutError:
@@ -1014,6 +1338,9 @@ class Controller:
             self._stopping = True
             for t in list(self._probes):
                 t.cancel()
+            if self.rate_match:
+                self.save_rates()
+            await self.retire_sensors()
             await self.stop_zones()
 
 

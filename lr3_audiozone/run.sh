@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # LR3 AudioZone — Spotify Connect -> Icecast mount -> SlimProto push do ELKO LARA.
-# librespot (Spotify) krmí Liquidsoap -> Icecast /default; SlimProto controller najde
-# LARA rádia a když Spotify hraje, pushne je na /default (aktivuje "audio zónu" v LAŘE).
+# librespot (Spotify) -> pacer + ffmpeg (nebo Liquidsoap s rate_match: off) -> Icecast mount
+# na každou zónu; SlimProto controller najde LARA rádia a když Spotify hraje, pushne je na
+# jejich mount (aktivuje "audio zónu" v LAŘE).
 # Tento skript je PID 1 kontejneru addonu.
 set -uo pipefail
 
@@ -18,7 +19,7 @@ BITRATE=$(jq -r '.bitrate // 192' "$OPTIONS")
 SPOTIFY_BITRATE=$(jq -r '.spotify_bitrate // 320' "$OPTIONS")
 ZONE_NAME=$(jq -r '.zone_name // "Audio zóna"' "$OPTIONS")
 CMODE=$(jq -r '.control_mode // "slimproto"' "$OPTIONS")
-IDLE_TIMEOUT=$(jq -r '.idle_timeout // 8' "$OPTIONS")
+IDLE_TIMEOUT=$(jq -r '.idle_timeout // 60' "$OPTIONS")
 CLI_PORT=$(jq -r '.cli_port // 9595' "$OPTIONS")
 
 # Zjisti LAN IP hostitele (host_network: true → kontejner ji sdílí).
@@ -32,7 +33,7 @@ ICE_HOSTNAME="$HA_IP"
 LR3_VERSION="$(awk -F'"' '/^version:/{print $2; exit}' /etc/lr3/config.yaml 2>/dev/null)"
 export LR3_VERSION="${LR3_VERSION:-?}"
 log "Startuji LR3 AudioZone v${LR3_VERSION} (port=${PORT}, bitrate=${BITRATE}k, spotify=${SPOTIFY_BITRATE}k, mode=${CMODE})"
-log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti zpět na rádia"
+log "Audio zóna: Spotify hraje → LARA se přepne; po ${IDLE_TIMEOUT}s nečinnosti se zóna vypne"
 
 # --- D-Bus + Avahi (librespot z raspotify používá avahi zeroconf backend) ---
 log "Spouštím D-Bus + Avahi (pro Spotify Connect discovery)..."
@@ -115,7 +116,7 @@ echo "  Režim ovládání:    ${CMODE}   (SlimProto :3483 + LMS CLI :${CLI_PORT
 echo "  V LAŘE nastav:     Audio zone function = ZAP, slim server IP = ${HA_IP}, CLI port = ${CLI_PORT}"
 echo "  → Controller teď hledá LARA rádia; pro každé založí vlastní Spotify zařízení"
 echo "    pojmenované podle rádia (a při dvou a více i skupinové)."
-echo "  → Po ${IDLE_TIMEOUT}s bez Spotify se rádia vrátí na seznam stanic (zastavená)."
+echo "  → Po ${IDLE_TIMEOUT}s bez Spotify se rádiu stream zastaví (na seznam stanic jen s park_on_zone_off)."
 echo "=================================================================="
 
 # --- SlimProto controller (discovery + push na LARA při Spotify-active) ---
@@ -131,7 +132,7 @@ fi
 # --- Čisté ukončení ---
 terminate() {
   log "Zastavuji..."
-  # SIGTERM controlleru → ten si své Liquidsoapy pozabíjí sám (Controller.stop_zones).
+  # SIGTERM controlleru → ten si své zóny (pacer/Liquidsoap) pozabíjí sám (Controller.stop_zones).
   [ -n "${CTRL_PID}" ] && kill "${CTRL_PID}" 2>/dev/null
   kill "${ICECAST_PID}" 2>/dev/null
   wait 2>/dev/null

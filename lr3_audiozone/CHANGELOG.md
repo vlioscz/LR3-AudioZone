@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.0
+
+- **The delay that grew during long listening is fixed.** Measured on a three-radio install:
+  at 48 kHz the LARAs play about 0.33 % slower than real time, so audio sent in exact real
+  time piled up in front of them — twelve seconds behind the app after an hour, and after
+  2 h 16 min (to the minute, on two different days) the streaming server gave up on the
+  radios, the music stopped for a moment and came back twenty seconds further on. The add-on
+  now sends each zone at the pace its radios actually play: it watches how full each radio's
+  buffer is and adjusts by a fraction of a percent, so the delay stays at about five seconds
+  however long you listen. The sound itself is unchanged. This replaces the audio engine for
+  the zones (Liquidsoap is no longer in the path), so there is a new option, **Send at the
+  radio's own pace** (`rate_match`): `auto` (on) by default, and `off` brings the previous
+  engine back if anything sounds wrong. The five-minute log line now shows the pacing and the
+  radio's buffer next to the backlog, which should stay at about zero.
+- **New: a Home Assistant sensor for every radio**, `sensor.lr3_lara_xxxxxx`, whose state is
+  the Spotify device that radio is playing — or `off`. It is there for automations, such as
+  switching speaker relays according to which device was picked in Spotify; see
+  `docs/rele-podle-zony.md`. The add-on now asks for Home Assistant API access to post it;
+  it reads nothing from Home Assistant.
+- **Moving music to another room no longer pushes the radio twice.** Since 0.4.3 a radio is
+  told to stop its old stream first, and its "stopped" answer was being mistaken for a
+  dropout, so a second push followed three seconds later and the radio buffered all over
+  again — in a third of the room changes in one log.
+- The start-up log names every radio in a group instead of just the first one, which made a
+  two-room group look like a single radio.
+- **The description of "How long LARA buffers" was wrong twice and is corrected.** Every
+  session on two installs set to 4.0 s started playing at about 60 KB anyway: above about
+  2.6 s the setting simply has no effect.
+- The start-up banner no longer says the radios go back to their station list (that has
+  been off by default since 0.3.6).
+
 ## 0.4.9
 
 - **A radio that stops reporting itself is now visible in the log.** One of the radios at a

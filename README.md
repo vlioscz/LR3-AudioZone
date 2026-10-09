@@ -17,9 +17,9 @@ you stop playing, the radio is released back to its own controls. No fallback ra
 > running it, this add-on replaces it: the same stream, and it drives the LARAs as well.
 
 ```
- "LARA Bathroom"   librespot ─► Liquidsoap ─► Icecast /lara_f2231c ──► LARA Bathroom
- "LARA Living rm"  librespot ─► Liquidsoap ─► Icecast /lara_aabbcc ──► LARA Living room
- "LARA All"        librespot ─► Liquidsoap ─► Icecast /all ─────────► both at once
+ "LARA Bathroom"   librespot ─► pacer ─► ffmpeg ─► Icecast /lara_f2231c ──► LARA Bathroom
+ "LARA Living rm"  librespot ─► pacer ─► ffmpeg ─► Icecast /lara_aabbcc ──► LARA Living room
+ "LARA All"        librespot ─► pacer ─► ffmpeg ─► Icecast /all ─────────► both at once
 
         SlimProto server (:3483) ── strm ──► radios  (tells them what to fetch)
         LMS CLI server  (:9595) ◄── state + buttons ── radios
@@ -35,9 +35,11 @@ you stop playing, the radio is released back to its own controls. No fallback ra
    once, and you can define **your own groups** of hand-picked rooms (`groups`).
    With a single radio the group device is not shown — it would just be a second name for the
    same speaker.
-3. Each zone's audio flows through **Liquidsoap** into its own **Icecast** mount. When Spotify
+3. Each zone's audio is encoded to MP3 and goes into its own **Icecast** mount. When Spotify
    is not playing, the mount carries silence — so it never goes down and a LARA can start
-   fetching it at any time.
+   fetching it at any time. It is sent **at the pace the radios actually play**, not by the
+   clock: a LARA runs a fraction of a percent off real time, and audio sent in exact real time
+   used to pile up in front of it until the delay reached tens of seconds (`rate_match`).
 4. The add-on is also a **Slim server** — two services:
    - **SlimProto** on TCP `:3483` — audio transport, volume, powering outputs on/off.
    - **LMS CLI** on TCP `:9595` — the text channel the LARA uses to ask what is playing and to
@@ -76,6 +78,7 @@ The SlimProto port is 3483.
 | `bitrate` | `192` | Bitrate of the MP3 sent to the LARA (kbps). |
 | `spotify_bitrate` | `320` | Spotify quality (96/160/320). Needs Premium. |
 | `samplerate` | `48000` | **Leave this alone.** At 44100 every LARA measured consumes audio about 39 B/s faster than we can deliver it, so its buffer bleeds out and the music stops roughly every 26 minutes — whatever the buffer is set to. 48000 removes the mismatch; 44100 is kept only for comparison. |
+| `rate_match` | `auto` | **Leave at `auto`** (= on). Sends each zone at the pace its radios really play — they run ~0.33 % slow at 48 kHz — so the delay stays at about 5 s instead of growing by 12 s an hour until the radio is dropped. `off` = the previous engine (Liquidsoap, exact real time). |
 | `spotify_remote_access` | `false` | Off: no Spotify login is stored, zones are visible to everyone on your network and to nobody outside it (turning it off also deletes a login stored earlier). On: the last account to select a zone stays logged in and sees it from anywhere — which is not ownership, anyone on the network can still take the zone over. |
 | `audio_cache_mb` | `200` | Spotify audio cached on disk **per zone** (0 = none). It was a fixed 1 GB each until 0.3.7 — four zones meant up to 4 GB written to the HA Green's soldered storage. |
 | `zone_name` | `Audio zóna` | Fallback name — used only when no radio is found. |
@@ -84,7 +87,7 @@ The SlimProto port is 3483.
 | `lara_name_prefix` | `true` | Prefix names with "LARA " ("LARA Kitchen" vs. "Kitchen"). |
 | `scan_subnet` | empty | Subnet to sweep, e.g. `10.0.0`. Empty = the one HA lives in. |
 | `zone_volume` | `90` | Where the Spotify slider starts for each zone. `0` = leave it at full. Since 0.4.0 this sets the Spotify volume, not the radio's — the radio ignores volume sent over the network. |
-| `buffer_seconds` | `2.7` | How much audio the radio collects before the first sound, so it is also how long you wait after pressing play. It does **not** cure music that cuts out: since the 48 kHz change the radio fills its own buffer to the brim by itself, so a bigger number only makes you wait longer. |
+| `buffer_seconds` | `2.7` | How much audio the radio collects before the first sound. **Above about 2.6 it has no effect**: the radios start at about 60 KB however long they are told to wait (every session on two installs set to 4.0 did). It does not cure music that cuts out either. |
 | `idle_timeout` | `60` | Seconds of Spotify silence before the radio is released. **Do not set this low** — see the warning below. Under 45 the add-on warns you in the log. |
 | `control_mode` | `slimproto` | `slimproto` = control the LARA. `off` = discover and log only; for short diagnostic windows only, see below. |
 | `park_on_zone_off` | `false` | Off: when the music stops, only the stream is stopped and muted; the radio keeps showing the audio zone until somebody touches it. On: also switch the source back to the station list over port 61695. Read the note below before turning it on. |
@@ -99,12 +102,21 @@ The SlimProto port is 3483.
 > **Configuration** and save it again (the Supervisor keeps previously saved options).
 > `fallback_delay` was replaced by `idle_timeout`.
 
+## Home Assistant sensors
+
+Every radio gets a sensor, `sensor.lr3_lara_xxxxxx` (the last six characters of its MAC; the
+exact names are listed in the add-on log at start-up). Its state is the **Spotify device that
+radio is playing** — "LARA Terrace", "LARA All", one of your groups — or `off`. Use it in
+automations: for instance, one LARA driving several speakers through relays can switch them
+according to which Spotify device was picked. A step-by-step guide with a ready-made
+automation (in Czech): [docs/rele-podle-zony.md](docs/rele-podle-zony.md).
+
 ## ⚠️ A short `idle_timeout` cuts the ends off songs
 
 Ending a zone tells the radio to throw away everything it has received and not yet played, and
-the radio is always several seconds behind the app — a few seconds of its own buffer, plus
-whatever has built up in the stream server over a long session. If the timeout is shorter than
-that lag, the last seconds of whatever was playing are discarded. One site ran 20 s and the
+the radio is always several seconds behind the app — about five with `rate_match` on, and up
+to half a minute with it off, once a long session has built up a backlog. If the timeout is
+shorter than that lag, the last seconds of whatever was playing are discarded. One site ran 20 s and the
 customer reported that *no song ever finished*. **60 is a good value**, and the only cost is the
 zone lingering on the display a little longer after the music stops.
 
@@ -139,8 +151,9 @@ it is `off` the radios never play, and the only sign of it is a warning in the l
 - ✅ **Moving music from one room to another** no longer leaves a radio silent (0.4.3) and no
   longer stutters (0.4.4).
 - ✅ **The display shows the playing track** — title and artist go out over the LMS CLI (:9595).
-- 🔎 **Open:** the freeze above, and a lag that grows over a long session — after an hour the
-  radio can be tens of seconds behind the app until playback is stopped and started again.
-  0.4.7 measures that in the log; the fix comes after the measurement.
+- 🔧 **The delay that grew during long sessions** — 12 s an hour, until the radio was dropped
+  after 2 h 16 min — is addressed in 0.5.0 by sending at the radios' own pace. Measured,
+  simulated and tested end to end; waiting for confirmation from a real long session.
+- 🔎 **Open:** the freeze above.
 - Test tool that needs no add-on deployment:
   `python tools/zone_test.py <this-machine-ip> --proxy <mp3-stream-url>`

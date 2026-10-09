@@ -24,6 +24,17 @@ configuration:
       addon stíhá dodávat — asi o 39 bajtů za sekundu — takže se jí vyprázdní buffer a hudba se
       zhruba po 26 minutách zastaví, ať je buffer nastavený jakkoli. Při 48000 tenhle nesoulad
       mizí. 44100 zůstává jen kvůli možnosti porovnání.
+  rate_match:
+    name: Posílat tempem rádia
+    description: >-
+      Nech auto. Žádná LARA nehraje přesně tou rychlostí, jakou jí posíláme — ty změřené při
+      48000 hrají asi o 0,33 % pomaleji — takže zvuk posílaný přesně v reálném čase se před
+      rádiem hromadí: po hodině je o dvanáct vteřin za aplikací a po dvou a čtvrt hodinách
+      ho streamovací server odpojí a hudba na chvíli zmlkne. Se zapnutou volbou addon sleduje,
+      jak plný má každé rádio buffer, a posílá takovým tempem, aby se držel na místě — zpoždění
+      tak zůstane kolem pěti vteřin, ať posloucháš jak dlouho chceš. Zvuk se nemění.
+      off = dosavadní chování, pro případ, že by něco znělo špatně; auto = co doporučuje
+      aktuální verze (zapnuto).
   spotify_remote_access:
     name: Přístup ke Spotify zvenčí sítě
     description: >-
@@ -82,10 +93,9 @@ configuration:
     name: Jak dlouho si LARA načítá, než začne hrát (s)
     description: >-
       Kolik zvuku si rádio nabere, než se ozve první tón — je to tedy zároveň doba, kterou po
-      stisku play čekáš. Zvyšování NEVYLÉČÍ vypadávající hudbu: od přechodu výstupu na 48 kHz
-      si rádio svůj buffer naplní až po okraj samo, takže vyšší číslo tady prodlouží jen to
-      čekání. Když se hudba zastavuje každou půlhodinu, koukej na Vzorkovací frekvenci
-      výstupu, ne sem.
+      stisku play čekáš. Nad zhruba 2,6 už to nedělá vůbec nic: rádia začnou hrát kolem 60 KB,
+      ať jim řekneme cokoli (tak začala každá relace na dvou instalacích nastavených na 4,0).
+      Vypadávající hudbu to nevyléčí — rádio si buffer během hraní doplní samo.
   idle_timeout:
     name: Vteřin ticha, než rádio opustí zónu
     description: >-

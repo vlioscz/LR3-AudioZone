@@ -227,6 +227,8 @@ async def run():
     assert events == [], "a radio that has not spoken since the underrun must be left alone"
     p3.stat_seq += 1                            # it answers again -> still alive
     clk.advance(1); await ctl.tick()
+    assert events == [], "not within the cooldown that every push starts (0.5.0)"
+    clk.advance(C.REPUSH_COOLDOWN); await ctl.tick()
     assert ("push", A, mine) in events, events
     events.clear(); clk.advance(1); await ctl.tick()
     assert events == [], "the re-push must be rate limited, not sent every tick"
@@ -489,6 +491,7 @@ async def run():
     # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
     # Without this, deleting that one call leaves every other case green.
     ctl = mk(radios=[(A, "Koupelna")])
+    ctl.rate_match = False
     ctl.render_liq = lambda z: os.path.join(C.STATE_DIR, "unused.liq")
     left = stored_login(mine)
     try:
@@ -497,6 +500,151 @@ async def run():
         pass                                     # liquidsoap is not installed here; fine
     assert not os.path.exists(left), "start_zone must release the login before spawning"
     print("35) start_zone releases the stored login before librespot can be started")
+
+    # 0.4.3 sends strm-q before a mount change; the radio answers STMf and reports "stop"
+    # until its new stream starts a few seconds later. recover_if_stalled took that for an
+    # underrun and pushed a second time — 6 of 19 switches in a colleague's log.
+    C.time = clk
+    ctl = mk({"idle_timeout": 30}, radios=[(A, "Koupelna"), (B, "Obývák")])
+    mine = ctl.mount_for(A)
+
+    class P5: mac, ip, name, current_mount, mode = A, "10.0.0.9", "LARA", None, "play"
+    P5.title = P5.artist = ""; P5.stat_seq = 1
+    p5 = P5(); ctl.slim.players[A] = p5
+    active_mounts = {"all"}; events.clear()
+    clk.advance(1); await ctl.tick()
+    assert ("push", A, "all") in events, events
+    for _ in range(40):                          # a while into the group session
+        clk.advance(1); p5.stat_seq += 1; await ctl.tick()
+    active_mounts = {mine}; events.clear()
+    for _ in range(int(C.ZONE_SETTLE) + 2):
+        clk.advance(1); await ctl.tick()
+    assert events.count(("push", A, mine)) == 1, events
+    events.clear(); p5.mode = "stop"            # STMf: its answer to our own strm-q
+    for _ in range(6):
+        clk.advance(1); p5.stat_seq += 1; await ctl.tick()
+    assert ("push", A, mine) not in events, f"a switch must not be pushed twice: {events}"
+    C.time = real_time
+    print("36) a mount switch is pushed once, not again when the radio confirms the stop")
+
+    # The zone list in the log used to name only a group's first radio, so a two-room group
+    # read as one radio.
+    said = []
+
+    class Say(C.logging.Handler):
+        def emit(self, r): said.append(r.getMessage())
+    h = Say(); C.log.addHandler(h)
+    mk({"groups": [{"name": "Dovnitr", "radios": ["Koupelna", "Obývák"]}]},
+       radios=[(A, "Koupelna"), (B, "Obývák"), (D, "Terasa")])
+    C.log.removeHandler(h)
+    line = next(m for m in said if "'Dovnitr'" in m)
+    assert "LARA Koupelna" in line and "LARA Obývák" in line, line
+    print("37) a group's line in the log names every member")
+
+    # rate_match. A LARA plays a fixed fraction off nominal — at 48 kHz the measured radios
+    # took 78 B/s less than we sent — and the surplus used to pile up in Icecast until it
+    # dropped the radio after 2 h 16 min. Simulated here for four hours against radios that
+    # are off by different amounts, including the wrong sign for the starting guess, with
+    # readings as noisy as the real ones.
+    import random
+    rnd = random.Random(7)
+    SIZE, RATE = 131072, 24000.0
+    for d in (-3250.0, -2000.0, -5000.0, 1640.0):
+        ctl = mk(radios=[(A, "Koupelna")])
+        assert ctl.rate_match, "rate_match: auto means on in this release"
+        mine = ctl.mount_for(A)
+
+        class PR: mac, mode, _stall_logged, buf_size = A, "play", False, SIZE
+        pr = PR(); ctl.slim.players[A] = pr; ctl.target[A] = mine
+        ctl.rate_ppm[mine] = ctl.default_ppm()
+        x, q, t, lo, q_late = 61440.0, 0.0, 0.0, SIZE, 0.0
+        for step in range(4 * 3600 // 5):
+            t += 5.0
+            q += RATE * (1 + ctl.rate_ppm[mine] / 1e6) * 5     # what we hand Icecast
+            out = RATE * (1 + d / 1e6) * 5                     # what the radio plays
+            take = min(q, SIZE - (x - out))                    # it pulls what fits
+            q -= take; x = x - out + take
+            lo = min(lo, x)
+            if step > 3600 // 5:
+                q_late = max(q_late, q)
+            pr.in_buf, pr.in_buf_at = int(x + rnd.uniform(-2500, 2500)), t
+            ctl.update_rates(t)
+        target = ctl.rate_target(SIZE)
+        assert lo > 30000, f"d={d}: the radio's buffer fell to {lo:.0f} B"
+        assert q_late < 3 * RATE, f"d={d}: Icecast still built up {q_late:.0f} B"
+        assert abs(x - target) < 10000, f"d={d}: buffer settled at {x:.0f}, not ~{target:.0f}"
+        assert abs(ctl.rate_base[mine] - d) < 400, f"d={d}: learned {ctl.rate_base[mine]:.0f}"
+    # Nothing to steer by (radio gone quiet): hold the rate, do not drift.
+    before = ctl.rate_ppm[mine]
+    pr.in_buf_at = t - 2 * C.RATE_FRESH
+    for _ in range(20):
+        t += 5.0; ctl.update_rates(t)
+    assert ctl.rate_ppm[mine] == before
+    assert float(open(C.Controller.rate_path(mine)).read()) == round(before, 1)
+    print("38) rate_match holds the radio's buffer just under full, whatever its offset")
+
+    # What was learned survives a restart — but only at the same sample rate, because the
+    # radios' offset flips sign between 44.1 and 48 kHz.
+    ctl.save_rates()
+    again = C.Controller({})
+    again.load_rates()
+    assert abs(again.rate_base[mine] - ctl.rate_base[mine]) < 0.1
+    other = C.Controller({"samplerate": 44100})
+    other.load_rates()
+    assert other.rate_base == {} and other.default_ppm() == 1640.0
+    off = C.Controller({"rate_match": "off"})
+    assert not off.rate_match and C.Controller({"rate_match": "on"}).rate_match
+    print("39) learned rates are kept across restarts at the same sample rate only")
+
+    # The pacer gets librespot's exact command line, as a list (a zone name is never shell),
+    # and its starting rate.
+    ctl = mk(radios=[(A, 'Kou"pel$na')])
+    z = ctl.zones[0]
+    cfg = __import__("json").load(open(ctl.write_pacer_config(z), encoding="utf-8"))
+    argv = cfg["librespot"]
+    assert argv[argv.index("--name") + 1] == 'LARA Kou"pel$na'
+    for flag in ("--backend", "pipe", "--format", "S16", "--enable-volume-normalisation",
+                 "--onevent", "/etc/lr3/spotify_event.sh", "--system-cache"):
+        assert flag in argv, flag
+    assert cfg["initial_ppm"] == -3250.0 and cfg["samplerate"] == 48000
+    assert float(open(cfg["rate_file"]).read()) == -3250.0
+    print("40) the pacer is configured with librespot's own flags and the starting rate")
+
+    # Home Assistant sensors: one per radio, the Spotify device it plays or "off". Posted when
+    # something changes, and in full every few minutes because HA forgets on restart.
+    ctl = mk({"groups": [{"name": "Dovnitr", "radios": ["Koupelna", "Obývák"]}]},
+             radios=[(A, "Koupelna"), (B, "Obývák"), (D, "Terasa")])
+    sa, sb, sd = (C.Controller.sensor_id(m) for m in (A, B, D))
+    ctl.target.update({A: "grp1", B: None, D: "all"})
+    st = ctl.sensor_states()
+    assert st[sa][0] == "Dovnitr" and st[sb][0] == "off" and st[sd][0] == "LARA All", st
+    assert st[sa][1]["radio"] == "LARA Koupelna" and st[sa][1]["mount"] == "grp1"
+    posted = []
+    ctl.ha_token = "t"
+    ctl.post_state = lambda e, s, a: posted.append((e, s))
+
+    async def publish(now):
+        await ctl.publish_sensors(now)
+        if ctl._ha_task:
+            await ctl._ha_task
+    await publish(1000.0)
+    assert sorted(posted) == sorted([(sa, "Dovnitr"), (sb, "off"), (sd, "LARA All")])
+    posted.clear(); await publish(1001.0)
+    assert posted == [], "nothing changed, nothing posted"
+    ctl.target[B] = ctl.mount_for(B)
+    await publish(1002.0)
+    assert posted == [(sb, "LARA Obývák")], posted
+    posted.clear(); await publish(1000.0 + C.HA_REFRESH + 1)
+    assert len(posted) == 3, "the periodic refresh re-posts everything"
+
+    def broken(e, s, a): raise OSError("401 Unauthorized")
+    ctl.post_state = broken
+    ctl.target[B] = None
+    said.clear(); C.log.addHandler(h)
+    await publish(2000.0); await publish(2001.0)
+    C.log.removeHandler(h)
+    assert sum("Home Assistant sensors" in m for m in said) == 1, said
+    print("41) one sensor per radio, posted on change, refreshed, failures reported once")
 
 
 asyncio.run(run())

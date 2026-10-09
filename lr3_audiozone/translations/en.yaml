@@ -24,6 +24,17 @@ configuration:
       than the add-on can deliver it - about 39 bytes a second - so its buffer empties and the
       music stops roughly every 26 minutes, whatever you set the buffer to. At 48000 that mismatch
       disappears. 44100 is kept only so the two can be compared.
+  rate_match:
+    name: Send at the radio's own pace
+    description: >-
+      Leave this at auto. No LARA plays at exactly the speed it is sent - at 48000 the ones
+      measured run about 0.33 % slow - so audio sent in exact real time piles up in front of
+      the radio: after an hour it is twelve seconds behind the app, after two and a quarter
+      hours the streaming server gives up on it and the music stops for a moment. With this on,
+      the add-on watches how full each radio's buffer is and sends at whatever pace keeps it
+      steady, so the delay stays at about five seconds however long you listen. The sound is
+      unchanged. off = the previous behaviour, kept in case something sounds wrong; auto = what
+      the current version recommends (on).
   spotify_remote_access:
     name: Spotify access from outside the network
     description: >-
@@ -85,10 +96,10 @@ configuration:
     name: How long LARA buffers before it starts (s)
     description: >-
       How much audio the radio collects before the first sound comes out, so it is also how long
-      you wait after pressing play. Raising it does NOT cure music that cuts out: since the
-      output moved to 48 kHz the radio fills its own buffer to the brim by itself, so a bigger
-      number here only makes you wait longer. If the music stops every half hour, the Output
-      sample rate is the setting to look at, not this one.
+      you wait after pressing play. Above about 2.6 it makes no difference at all: the radios
+      start playing at about 60 KB however long they are told to wait (every session at two
+      sites set to 4.0 started there). It does not cure music that cuts out either - the radio
+      fills its own buffer further once it is playing.
   idle_timeout:
     name: Seconds of silence before the radio leaves the zone
     description: >-

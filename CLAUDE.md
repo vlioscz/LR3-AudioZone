@@ -37,9 +37,10 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.4.9.** The two things still open are the **KP2 freeze** at site 5 and the
-  **lag that grows over a session**; both have their own sections below, and both are waiting
-  on a field log rather than on a decision.
+- **Current version 0.5.0.** It replaced Liquidsoap in the zone path with `pacer.py` to fix
+  the growing lag (the radios run 0.33 % slow — measured, see below), added one HA sensor per
+  radio, and fixed a double push on every room change. Still open: the **KP2 freeze** at
+  site 5, and **field confirmation** that the backlog stays at ~0 with rate_match on.
 
 ## Repo layout
 
@@ -55,7 +56,10 @@ lr3_audiozone/
   radio.liq.tpl      Liquidsoap: librespot (Spotify) -> silence. Nothing else.
   translations/      config UI labels (cs, en)
   lr3ctl/            the controller (Python, stdlib only)
-    controller.py    zones (one per radio + group), pipeline supervision, the on/off machine
+    controller.py    zones (one per radio + group), pipeline supervision, the on/off machine,
+                     rate steering (update_rates), HA sensors (sensor.lr3_lara_<mac6>)
+    pacer.py         one zone's audio when rate_match is on: librespot -> paced PCM -> ffmpeg
+                     -> Icecast SOURCE. The clock of the zone. (Liquidsoap only with it off.)
     slimproto.py     SlimProto server :3483 — strm/aude/audg, STAT parsing
     lmscli.py        LMS CLI server :9595 — the LARA's control/display channel
     discovery.py     UDP broadcast + the TCP /24 sweep that actually finds them
@@ -184,11 +188,13 @@ Consequences, and they matter:
 
   The buffer now **fills** from the start threshold to the player's full 131072 B and holds
   there. **Underruns: 13 on the day before the change, 0 in the four days since.**
-- ❌ **The "~62 KB ceiling" was wrong** and is retracted. ~62 KB is just the start threshold
-  (`buffer_seconds` × bitrate); the radio grows past it to ~130 KB once the source can keep up.
-  At 44.1 kHz it never could, so the number only ever went down from there and looked like a
-  cap. `buffer_seconds` therefore sets the pre-roll (and the wait before the first sound) only;
-  the radio manages its own buffer after that.
+- ❌ **The "~62 KB ceiling" was wrong** and is retracted. The radio grows past it to ~130 KB
+  once the source can keep up. At 44.1 kHz it never could, so the number only ever went down
+  from there and looked like a cap.
+- ⚠️ **But the start threshold IS capped at ~60 KiB.** Every session at two installs set to
+  `buffer_seconds` 4.0 (96 KB requested in `strm-s`) reads `in_buf` 60–64 KB 12–21 s in — dozens
+  of sessions, never higher. So above ~2.6 s the setting does nothing at all; the docs said
+  "only makes you wait longer" in 0.4.9 and that was wrong too. Corrected in 0.5.0.
 
 ## Site 5 freeze statistics, 2026-08-13 → 2026-10-04 (one log, 7327 lines)
 
@@ -226,7 +232,51 @@ family of theories built around pushes, parks and recovery. 0.4.2 adds the measu
 missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
 whether the unit was still alive.
 
-## The lag that grows over a session (open, measurement added in 0.4.7)
+## ✅ The lag that grows: the radios run 0.33 % slow at 48 kHz (measured 2026-10-09, fixed in 0.5.0)
+
+0.4.7's backlog lines answered it, on the third-party install (zone HOUSE, two radios, 06:45 on):
+
+```
+06:45–07:00  in_buf 62 → 130 KB        the surplus first fills the radio's own buffer (~75 B/s)
+07:14–09:00  Icecast backlog +68…+89 B/s, 22 readings, mean ~78 B/s ≈ +11.7 s of audio/hour
+09:01:08     Obývák STMu   09:01:30 Koupelna STMu   (full in_buf a minute earlier)
+09:05        backlog +892 B/s = Icecast writing off what it held for them
+```
+
+At 48 kHz the LARAs consume ~3250 ppm **less** than real time (at 44.1 kHz they consumed
+~1640 ppm **more** — opposite signs, so this is how the firmware derives each rate, not one
+crystal). The surplus fills the radio (to ~130 KB), then Icecast's per-listener queue; at
+`queue-size` (512 KiB ≈ 22 s) Icecast drops the listener, the radio plays out its buffer, STMu,
+`recover_if_stalled` re-pushes, music resumes ~22 s further on. **2 h 16 min both times**:
+10-08 11:45:32 → 14:01:38 (three radios within 21 s), 10-09 06:45:08 → 09:01:08 (two within 22 s).
+Peak lag just before ≈ 22 + 5.4 + 0.4 s — the colleague's "30 s".
+
+**No knob inside Liquidsoap 2.1 fixes it.** Its clock sleeps to absolute CPU deadlines and
+every speed operator still fills the same samples per tick, so its output byte rate is exactly
+24 000 B/s, full stop. Only the bytes per wall-clock second matter, so 0.5.0 replaces Liquidsoap
+in the zone path (`rate_match`, default `auto` = on; `off` restores Liquidsoap unchanged):
+
+- **`pacer.py`** (one process per zone) is the clock. It reads librespot's PCM (reader-paced:
+  it decodes ahead and blocks on a full pipe) at `44100 × (1 + ppm/10⁶)` frames/s against an
+  anchor (no drift accumulation), pads silence when librespot writes nothing (mount never
+  drops), and feeds an ffmpeg (`libmp3lame`, CBR, `-write_xing 0 -id3v2_version 0
+  -flush_packets 1`) that has no clock of its own. It does the Icecast `SOURCE` itself so the
+  password never sits in an ffmpeg URL (ffmpeg echoes URLs into errors → the add-on log).
+- **`Controller.update_rates`** steers `ppm` through `/tmp/lr3_rate_<mount>`: a slow PI loop on
+  the radio's reported `in_buf` (STAT, every 5 s), target `size − 20 KB` (~108 KB ≈ 4.6 s), the
+  hungriest radio decides on a shared mount, clamp ±8000 ppm, learned base saved to
+  `/data/rate_ppm.json` per mount (ignored if samplerate/bitrate changed). Starting points:
+  `DEFAULT_PPM = {48000: -3250, 44100: +1640}`.
+- **Pitch is untouched** — it is set by the radio's crystal, as before. `ppm` changes only how
+  fast we ask Spotify for the next second of music.
+- Verified: 4-hour simulations for offsets −5000…+1640 ppm (incl. wrong-sign prior) settle at
+  target with zero Icecast backlog; and end to end in the real image (icecast 2.4.4, ffmpeg,
+  pacer, real `update_rates`, a simulated slow radio). **Field proof to look for**: the 5-minute
+  `Icecast backlog` line reading ~0 for hours, now with `pacing … ppm, radio buffer … KB`.
+
+⚠️ Do **not** lower Icecast's `queue-size` as a "fix" for this — it only shortens the cycle.
+
+## The lag that grows over a session (history — the analysis before the measurement)
 
 Reported from the third-party install: after ~an hour of playing, switching took about 30 s;
 stopping and starting cleared it and it was instant again. **This is NOT the site 5 problem** —
@@ -273,6 +323,10 @@ stats failure → 0.4.8, this → 0.4.9). The logger level is hardcoded INFO and
 from the add-on options, so a diagnostic written at DEBUG is a diagnostic that does not exist.
 Write it at INFO, once, and say what the consequence is.
 
+Note for 0.5.0: `update_rates` steers by the same STATs, so a blind radio also stops steering
+its mount — the rate is then held where it was, which is safe (it does not drift), but a
+blind radio is now one more reason to want the frame-kind line.
+
 **Status 2026-10-09:** 0.4.9 is live at site 5 (`05:27:12`, `idle_timeout=120s`,
 `buffer=4.0s`). The first 40 s showed only the handshake `SETD` frames (see the protocol
 section — they carry the radio's name and are benign), and no playback happened in that window,
@@ -311,6 +365,12 @@ field on 2026-10-02 — Obývák was 4079 s / 106.8 MB into `/lara_10318e`, got 
 fetched nothing for the whole detection window following a mount change. It is not specific to
 the group: individual→individual switches do it too. 0.4.3 sends `strm-q` first when
 `current_mount` is set and differs, both commands back to back on the same connection.
+
+⚠️ **And that `strm-q` produced a double push until 0.5.0.** The radio answers it with STMf,
+which sets `mode=stop` until the new stream's STMs a few seconds later; `recover_if_stalled`
+saw a stopped radio with a fresh STAT and pushed again ~3 s after every switch (6 of 19
+switches in the colleague's log). Since 0.5.0 **every** push in `route()` starts
+`REPUSH_COOLDOWN`, and the stall's STAT count is noted even inside the cooldown.
 
 A re-push of the **same** mount (the underrun recovery) deliberately does *not* send `strm-q` —
 that path should not get more aggressive. If the zombie state ever reappears, note that a plain
@@ -365,6 +425,21 @@ zone function"** on each device; `off` is for a short diagnostic window only.
 ⚠️ Do **not** "fix" this by adding retries, shortening cooldowns or making recovery more
 aggressive: every extra attempt asks a device that is visibly running out of sockets for
 another one. Do not blind-write anything else over 61695.
+
+## Home Assistant sensors (0.5.0)
+
+One `sensor.lr3_lara_<last 6 MAC hex>` per radio, posted through the Supervisor's Core API
+(`homeassistant_api: true`, `SUPERVISOR_TOKEN`). State = the Spotify device (zone name) the
+radio is pushed to (`self.target`), or `off`; attributes radio/mount/spotify(playing|idle)/
+mac/ip. Posted on change from a background task (blocking urllib in a thread — never on the
+loop that carries the heartbeat), re-posted every 5 min because HA forgets API-set states on
+restart, set to `unavailable` on shutdown, failures logged once. Read-only by design: asked
+for so a relay can switch speakers by the device picked in Spotify (`docs/rele-podle-zony.md`).
+API-set entities have no unique_id — not renameable in the UI; that is accepted.
+
+**Not** an integration, by decision (2026-10-09): someone else has already made a LARA
+integration, and anyone playing from Spotify does not need one. Control of the radio from HA
+would also mean traffic on :61695, the port we stopped writing to because of the freezes.
 
 ## Spotify availability (`spotify_remote_access`, 0.3.5)
 

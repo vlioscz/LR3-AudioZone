@@ -102,6 +102,8 @@ class Player:
         # and keeps its display lit, so nothing else distinguishes it from one that is fine.
         self.bytes_rx = 0
         self.in_buf = 0
+        self.buf_size = 0           # its input buffer's capacity (131072 on fw 3.7.001)
+        self.in_buf_at = 0.0        # when in_buf was last reported — rate_match steers by it
         self._rx_at = 0.0           # when bytes_rx last advanced
         self._reported_at = 0.0     # when we last wrote a progress line
         self._stall_logged = False
@@ -270,6 +272,7 @@ class SlimProtoServer:
         player.elapsed = f[13] / 1000.0 if f[13] else float(f[11])
         log.debug("LARA %s STAT %r out_buf=%d/%d in_buf=%d/%d bytes_rx=%d elapsed=%.1f",
                   player.mac, f[0], f[10], f[9], f[5], f[4], f[6], player.elapsed)
+        player.buf_size = f[4]
         self._track_progress(player, in_buf=f[5], bytes_rx=f[6])
         self._apply_event(player, f[0])
 
@@ -289,6 +292,7 @@ class SlimProtoServer:
         """
         now = time.monotonic()
         player.in_buf = in_buf
+        player.in_buf_at = now
         if bytes_rx != player.bytes_rx:
             if player._stall_logged:
                 log.warning("LARA %s is fetching audio again after %.0fs of silence",
