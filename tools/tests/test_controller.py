@@ -85,7 +85,12 @@ async def run():
     assert ("push", A, "all") in events and ("push", B, "all") in events, events
     print("6) group device feeds every radio")
 
+    # Taking a radio out of the group now has to settle first (0.4.4), so one tick is not
+    # enough: handing a session over lights both librespots up for a moment.
     events.clear(); active_mounts = {"all", ctl.mount_for(A)}
+    await ctl.tick()
+    assert events == [], "a hand-over must not be acted on in the same second"
+    ctl._zone_pending[A] = (ctl.mount_for(A), time.monotonic() - C.ZONE_SETTLE - 1)
     await ctl.tick()
     assert events[0] == ("push", A, ctl.mount_for(A)), events
     assert not any(e[0] == "push" and e[1] == B for e in events), events
@@ -93,6 +98,8 @@ async def run():
     print("7) a radio's own device beats the group; the others keep playing")
 
     events.clear(); active_mounts = {"all"}
+    await ctl.tick()
+    ctl._zone_pending[A] = ("all", time.monotonic() - C.ZONE_SETTLE - 1)   # let it settle
     await ctl.tick()
     assert ("push", A, "all") in events, events
     events.clear(); active_mounts = set()
@@ -306,6 +313,61 @@ async def run():
     C.log.removeHandler(h)
     print("22) control_mode=off says so when Spotify is playing into the void")
 
+    # Hand-picked groups: "just the inside ones", asked for from the field because
+    # "LARA All" is all-or-nothing.
+    C3 = "00:0a:59:11:22:44"
+    g = [{"name": "Dovnitr", "radios": ["Koupelna", "LARA Obývák"]}]
+    ctl = mk({"groups": g}, radios=[(A, "Koupelna"), (B, "Obývák"), (C3, "Terasa")])
+    names = [z.name for z in ctl.zones]
+    assert names == ["LARA Koupelna", "LARA Obývák", "LARA Terasa", "Dovnitr", "LARA All"], names
+    grp = next(z for z in ctl.zones if z.name == "Dovnitr")
+    assert sorted(grp.radios) == sorted([A, B]) and not grp.covers(C3)
+    # precedence: own room > hand-picked group > everything
+    assert ctl.zone_for(A, {"all", grp.mount, ctl.mount_for(A)}) == ctl.mount_for(A)
+    assert ctl.zone_for(A, {"all", grp.mount}) == grp.mount
+    assert ctl.zone_for(C3, {"all", grp.mount}) == "all", "a non-member must not follow it"
+    print("23) a hand-picked group plays to its members only, and sits below their own zones")
+
+    # names are matched the way a person types them, and nonsense is refused rather than
+    # silently producing a device that drives the wrong rooms
+    loose = mk({"groups": [{"name": "X", "radios": ["  koupelna ", "obývák"]}]},
+               radios=[(A, "Koupelna"), (B, "Obývák")])
+    assert sorted(next(z for z in loose.zones if z.name == "X").radios) == sorted([A, B])
+    bad = mk({"groups": [{"name": "Y", "radios": ["Koupelna", "Neexistuje"]},
+                         {"name": "", "radios": ["Koupelna", "Obývák"]}]},
+             radios=[(A, "Koupelna"), (B, "Obývák")])
+    assert [z.name for z in bad.zones] == ["LARA Koupelna", "LARA Obývák", "LARA All"],         "a group with a missing member or no name must be dropped, not half-built"
+    print("24) member names are matched loosely; a broken group is dropped with a warning")
+
+    # The wobble this guards: moving a Spotify session between a radio's own device and the
+    # group leaves both reporting "playing" for a second, so the choice flipped there and
+    # straight back — five times in one afternoon, always a pair one second apart. Since 0.4.3
+    # each bounce terminates the stream and re-buffers, which the customer feels as a long,
+    # stuttering switch.
+    ctl = mk({"idle_timeout": 30}, radios=[(A, "Koupelna"), (B, "Obývák")])
+    mine = ctl.mount_for(A)
+    events.clear(); active_mounts = {"all"}
+    await ctl.tick()
+    assert ctl.target[A] == "all", events
+    events.clear()
+    for _ in range(3):                       # both zones alight, flapping between ticks
+        active_mounts = {"all", mine}; await ctl.tick()
+        active_mounts = {"all"};       await ctl.tick()
+    assert events == [], f"a wobble must move nothing: {events}"
+    assert ctl.target[A] == "all"
+    # ...but a hand-over that actually holds is honoured.
+    active_mounts = {"all", mine}
+    await ctl.tick()
+    ctl._zone_pending[A] = (mine, time.monotonic() - C.ZONE_SETTLE - 1)
+    await ctl.tick()
+    assert ("push", A, mine) in events and ctl.target[A] == mine, events
+    # And a zone going quiet must still reach the idle countdown immediately, or it never
+    # switches off at all.
+    events.clear(); active_mounts = set()
+    await ctl.tick()
+    assert A in ctl.idle_since, "the idle countdown must start the moment nothing is active"
+    print("25) a flapping hand-over is ignored; a real one, and going quiet, are not")
+
     # --- 0.4.0: output samplerate and the volume that actually does something ----
     # At 44.1 kHz every LARA measured drains its input buffer ~39 B/s and underruns every
     # 26 minutes, on two unrelated sites. The output moves to 48 kHz; librespot still emits
@@ -320,7 +382,7 @@ async def run():
     back = mk({"samplerate": 44100}, radios=[(A, "Koupelna")])
     b2 = open(back.render_liq(back.zones[0]), encoding="utf-8").read()
     assert "settings.frame.audio.samplerate.set(44100)" in b2 and "samplerate=44100," in b2
-    print("23) the output runs at 48 kHz while librespot stays pinned to 44100")
+    print("26) the output runs at 48 kHz while librespot stays pinned to 44100")
 
     # zone_volume used to reach only audg, which is inaudible on this firmware, while the
     # Spotify slider sat hardcoded at 100 — "I set 50 and it plays at 100".
@@ -330,7 +392,7 @@ async def run():
         cmd = next(l for l in open(c.render_liq(c.zones[0]), encoding="utf-8")
                    if "librespot --name" in l)
         assert f"--initial-volume {want} " in cmd, cmd
-    print("24) zone_volume now sets where the Spotify slider starts")
+    print("27) zone_volume now sets where the Spotify slider starts")
 
     # --- spotify_remote_access -------------------------------------------------
     C.DATA_DIR = tempfile.mkdtemp(prefix="lr3data_")
@@ -353,7 +415,7 @@ async def run():
     assert "--disable-credential-cache" in cmd, cmd
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in cmd, cmd
     assert f'--cache "{C.audio_cache_dir(mine)}"' in cmd, cmd
-    print("25) remote access off -> librespot is told not to store the login")
+    print("28) remote access off -> librespot is told not to store the login")
 
     # A canary in the audio cache: releasing a login must never cost the user up to 1 GB of
     # cached audio per zone, which is what would happen if the two ever shared a directory.
@@ -365,7 +427,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert not os.path.exists(new) and not os.path.exists(old), "the login must be deleted"
     assert os.path.exists(os.path.join(canary, "track")), "the audio cache must survive"
-    print("26) remote access off deletes a login stored earlier, keeping the audio cache")
+    print("29) remote access off deletes a login stored earlier, keeping the audio cache")
 
     # A radio switched off while the switch is flipped is not in this boot's zone set, so a
     # per-zone loop would leave its login on disk for ever — and in every HA backup.
@@ -374,7 +436,7 @@ async def run():
     ctl = mk(radios=[(A, "Koupelna")])
     assert ctl.purge_stored_logins() >= 2
     assert not os.path.exists(absent) and not os.path.exists(legacy_absent)
-    print("27) logins of radios that are switched off right now are released too")
+    print("30) logins of radios that are switched off right now are released too")
 
     ctl = mk({"spotify_remote_access": True}, radios=[(A, "Koupelna")])
     cmd = next(l for l in open(ctl.render_liq(ctl.zones[0]), encoding="utf-8")
@@ -390,7 +452,7 @@ async def run():
     ctl.prepare_credentials(mine)
     assert os.path.exists(C.credentials_file(mine))
     assert not os.path.exists(C.legacy_credentials_file(mine)), "the superseded copy must go"
-    print("28) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
+    print("31) remote access on migrates a pre-0.3.5 login and drops the superseded copy")
 
     ctl = mk(radios=[(A, "Koupelna")])           # remote access off
     ctl.cred_cache_flag_ok = False
@@ -400,7 +462,7 @@ async def run():
     assert "--disable-credential-cache" in ctl.librespot_cache_args(mine)
     for part in (C.audio_cache_dir(mine), C.login_cache_dir(mine)):
         assert f'"{part}"' in ctl.librespot_cache_args(mine), "paths must be quoted for sh -c"
-    print("29) the flag follows the probe, and the paths are quoted")
+    print("32) the flag follows the probe, and the paths are quoted")
 
     # The audio cache used to be a hard-coded 1 GB per zone, i.e. 4 GB on a four-zone site,
     # written to the soldered eMMC of an HA Green.
@@ -411,7 +473,7 @@ async def run():
     assert "--cache-size-limit" not in off and "--cache " not in off, off
     assert f'--system-cache "{C.login_cache_dir(mine)}"' in off, \
         "the login dir must stay even with the audio cache off — it is what the switch clears"
-    print("30) the audio cache is sized by the option, and 0 drops it without losing the rest")
+    print("33) the audio cache is sized by the option, and 0 drops it without losing the rest")
 
     # The line the whole feature hangs on: start_zone must actually call prepare_credentials.
     # Without this, deleting that one call leaves every other case green.
@@ -423,7 +485,7 @@ async def run():
     except Exception:
         pass                                     # liquidsoap is not installed here; fine
     assert not os.path.exists(left), "start_zone must release the login before spawning"
-    print("31) start_zone releases the stored login before librespot can be started")
+    print("34) start_zone releases the stored login before librespot can be started")
 
 
 asyncio.run(run())

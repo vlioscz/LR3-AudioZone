@@ -63,6 +63,12 @@ STOP_ECHO_GRACE = 6.0
 # After an underrun the LARA stops playing but keeps the control connection, so `target` still
 # says "playing" and nothing ever re-pushes. Re-push, but not more often than this.
 REPUSH_COOLDOWN = 15.0
+# A zone change has to hold for this long before we act on it. Moving a Spotify session from a
+# radio's own device to "LARA All" leaves both librespots reporting "playing" for a moment, and
+# the specific-beats-group rule then picks the individual zone on one tick and the group on the
+# next. Harmless until 0.4.3; now that a mount change terminates the old stream properly, each
+# bounce costs a real re-buffer, and the customer feels it as "switching took ages".
+ZONE_SETTLE = 3.0
 # When a radio drops its SlimProto session we go and ask whether the unit is still alive at
 # all. Three TCP handshakes per port, spread over two minutes, then we stop — a wedged radio
 # costs nothing to probe and a healthy one must not be hammered.
@@ -174,6 +180,7 @@ class Controller:
         self.audio_cache_mb = max(0, int(opt(cfg, "audio_cache_mb", 200)))
         self.fallback_name = opt(cfg, "zone_name", "Audio zóna")
         self.group_name = opt(cfg, "group_name", "LARA All")
+        self.custom_groups = opt(cfg, "groups", []) or []
         self.name_prefix = bool(opt(cfg, "lara_name_prefix", True))
         self.idle_timeout = max(0, int(opt(cfg, "idle_timeout", 60)))
         self.volume = int(opt(cfg, "zone_volume", 90))
@@ -199,6 +206,7 @@ class Controller:
         self._stopped_at: dict[str, float] = {}    # mac -> when WE last sent it a stop
         self._repushed_at: dict[str, float] = {}   # mac -> when we last recovered an underrun
         self._stall_seq: dict[str, int] = {}       # mac -> its STAT count when it stalled
+        self._zone_pending: dict[str, tuple] = {}  # mac -> (mount it wants, since when)
         self._muzzle_warned_at = -1e9              # last control_mode=off nag
         self.applied_volume: dict[str, int] = {}   # mac -> volume we last sent
         self.slim: SlimProtoServer | None = None
@@ -262,6 +270,7 @@ class Controller:
                     name = f"{name} {mac.replace(':', '').upper()[-4:]}"
                 used[name] = mac
                 zones.append(Zone(self.mount_for(mac), name, [mac]))
+            zones.extend(self.custom_group_zones(used))
             if len(macs) > 1:
                 zones.append(Zone(GROUP_MOUNT, self.group_name, None))
         self.zones = zones
@@ -270,12 +279,79 @@ class Controller:
             log.info("zone /%s  ->  Spotify device %r  (%s)", z.mount, z.name,
                      "všechna rádia" if z.is_group else z.radios[0])
 
+    def custom_group_zones(self, by_name: dict[str, str]) -> list[Zone]:
+        """Extra Spotify devices for hand-picked sets of radios (`groups`).
+
+        "LARA All" is all-or-nothing, and a house wants "just the inside ones". Members are
+        named the way the user sees them in the Spotify app, which is the only name they have
+        ever been shown; a MAC is accepted too, for radios that have no name of their own.
+        Matching ignores case and the "LARA " prefix, because nobody will type it consistently.
+
+        These sit **between** the per-radio zones and "LARA All" in `self.zones`, so the
+        precedence reads the way people expect: your own room beats a small group, and a small
+        group beats everything-at-once.
+        """
+        def key(s: str) -> str:
+            s = (s or "").strip().lower()
+            return s[5:].strip() if s.startswith("lara ") else s
+
+        lookup = {key(n): m for n, m in by_name.items()}
+        lookup.update({m.lower(): m for m in self.radios})
+        out: list[Zone] = []
+        for i, g in enumerate(self.custom_groups):
+            name = (g.get("name") or "").strip() if isinstance(g, dict) else ""
+            members = g.get("radios") or [] if isinstance(g, dict) else []
+            if not name:
+                log.warning("skipping group #%d: it has no name", i + 1)
+                continue
+            macs, missing = [], []
+            for want in members:
+                mac = lookup.get(key(want))
+                (macs.append(mac) if mac and mac not in macs else
+                 None if mac else missing.append(want))
+            if missing:
+                log.warning("group %r: no radio here is called %s — check the spelling against "
+                            "the names in the log above", name, ", ".join(repr(m) for m in missing))
+            if len(macs) < 2:
+                log.warning("group %r needs at least two radios that exist; skipping it", name)
+                continue
+            out.append(Zone(f"grp{i + 1}", name, macs))
+        return out
+
     def zone_for(self, mac: str, active: set[str]) -> str | None:
         """Which mount this radio should play. A radio's own device beats the group device."""
         for z in self.zones:            # specific zones come first, group last
             if z.mount in active and z.covers(mac):
                 return z.mount
         return None
+
+    def settled_zone_for(self, mac: str, active: set[str], now: float) -> str | None:
+        """`zone_for`, but a change has to persist for ZONE_SETTLE before it counts.
+
+        Without this the controller chases the gap between two librespots: handing a session
+        from a radio's own device to the group lights both of them up for a second, so the
+        choice flips to the individual zone and straight back. Observed five times in one
+        afternoon, always a pair one second apart.
+
+        Staying put is never delayed — only a *change* has to hold still. The radio keeps
+        playing whatever it is already playing while the wobble settles.
+        """
+        want = self.zone_for(mac, active)
+        current = self.target.get(mac)
+        if want == current or want is None or current is None:
+            # Only a hand-over between two live zones can wobble. Starting from silence must
+            # not be delayed, and "nothing is playing any more" must reach the caller at once
+            # or the idle countdown never runs and the zone never switches off at all.
+            self._zone_pending.pop(mac, None)
+            return want
+        pending = self._zone_pending.get(mac)
+        if pending is None or pending[0] != want:
+            self._zone_pending[mac] = (want, now)
+            return current
+        if now - pending[1] < ZONE_SETTLE:
+            return current
+        self._zone_pending.pop(mac, None)
+        return want
 
     # --- Spotify availability ---------------------------------------------------
     def librespot_cache_args(self, mount: str) -> str:
@@ -722,7 +798,7 @@ class Controller:
         active = {z.mount for z in self.zones if spotify_active(z.mount)}
         now = time.monotonic()
         for key in list(self.radios.keys()):
-            mount = self.zone_for(key, active)
+            mount = self.settled_zone_for(key, active, now)
             if mount:
                 await self.route(key, mount)
                 if self.target.get(key) == mount:

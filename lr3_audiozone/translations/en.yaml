@@ -54,6 +54,15 @@ configuration:
     description: >-
       Name of the Spotify device that plays to every radio at once. It only appears when at
       least two radios are found - with one it would just be a second name for the same speaker.
+  groups:
+    name: Extra groups of radios
+    description: >-
+      Optional. "LARA All" plays to every radio; this makes extra Spotify devices for
+      hand-picked sets, for instance one called "Inside" containing only the bathroom and
+      the living room. Name each radio the way it appears in the Spotify app - the "LARA "
+      prefix and capitals do not matter. A group needs at least two radios that actually
+      exist, otherwise it is skipped and the log says why. Picking a single room still
+      beats any group it belongs to.
   lara_name_prefix:
     name: Prefix names with "LARA"
     description: >-

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4
+
+- **New: your own groups of rooms.** "LARA All" has always been all-or-nothing. You can now
+  define extra Spotify devices for hand-picked sets — say one called "Inside" with just the
+  bathroom and the living room. Name the radios the way they appear in the Spotify app;
+  capitals and the "LARA " prefix do not matter. Choosing a single room still takes priority
+  over any group it belongs to.
+- **Switching rooms no longer stutters.** Handing a Spotify session from one room to another
+  briefly leaves both looking active, and the add-on was acting on that — switching the radio
+  across and straight back a second later. Harmless before 0.4.3; since then each bounce
+  re-buffers the radio, which is why switching started to feel slow. A change now has to hold
+  for three seconds before it counts. Starting and stopping are unaffected.
+
 ## 0.4.3
 
 - **Moving music from one room to another, or into "LARA All", no longer leaves a radio
