@@ -82,9 +82,10 @@ configuration:
     name: Jak dlouho si LARA načítá, než začne hrát (s)
     description: >-
       Kolik zvuku si rádio nabere, než se ozve první tón — je to tedy zároveň doba, kterou po
-      stisku play čekáš. Zvyšování NEVYLÉČÍ vypadávající hudbu: rádio si víc než zhruba 62 KB
-      nenabere, ať mu pošleme cokoli, takže nad ~2,7 s se mění jen to čekání. Když se hudba
-      zastavuje každou půlhodinu, kouká se na Vzorkovací frekvenci výstupu, ne sem.
+      stisku play čekáš. Zvyšování NEVYLÉČÍ vypadávající hudbu: od přechodu výstupu na 48 kHz
+      si rádio svůj buffer naplní až po okraj samo, takže vyšší číslo tady prodlouží jen to
+      čekání. Když se hudba zastavuje každou půlhodinu, koukej na Vzorkovací frekvenci
+      výstupu, ne sem.
   idle_timeout:
     name: Vteřin ticha, než rádio opustí zónu
     description: >-

@@ -85,10 +85,10 @@ configuration:
     name: How long LARA buffers before it starts (s)
     description: >-
       How much audio the radio collects before the first sound comes out, so it is also how long
-      you wait after pressing play. Raising it does NOT cure music that cuts out: the radio never
-      holds more than about 62 KB whatever it is told, so anything above ~2.7 s changes the wait
-      and nothing else. If the music stops every half hour, the Output sample rate is the setting
-      to look at, not this one.
+      you wait after pressing play. Raising it does NOT cure music that cuts out: since the
+      output moved to 48 kHz the radio fills its own buffer to the brim by itself, so a bigger
+      number here only makes you wait longer. If the music stops every half hour, the Output
+      sample rate is the setting to look at, not this one.
   idle_timeout:
     name: Seconds of silence before the radio leaves the zone
     description: >-

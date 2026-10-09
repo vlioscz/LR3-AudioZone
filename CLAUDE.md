@@ -34,10 +34,12 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
   single field is why the zone used to switch on but stay silent.
 - ✅ **The LARA really does use the LMS CLI on :9595** — it logs in, polls, and reports its own
   volume there. Serving it is not optional if you want its display/buttons to behave.
-- 🧪 **v0.2.0** — fallback radio removed; added the **LMS CLI server** (`lmscli.py`, :9595),
-  power on/off (`aude`), STAT parsing (mode/elapsed) and the idle→off state machine.
-  What has **not** run on hardware yet is the controller's Spotify-driven state machine
-  (both of its ends are verified; only the add-on-level loop is untested).
+- ✅ **In daily production use since 0.3.x** at three installations, two of them with three
+  radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
+  Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
+- **Current version 0.4.9.** The two things still open are the **KP2 freeze** at site 5 and the
+  **lag that grows over a session**; both have their own sections below, and both are waiting
+  on a field log rather than on a decision.
 
 ## Repo layout
 
@@ -246,6 +248,36 @@ because the listener joins after the source, but its rate of change is exactly t
 A log line every five minutes gives B/s and seconds-of-audio per hour. If it reads ~0 once the
 buffer has filled, the lag is a one-off fill and only `idle_timeout` matters; if it stays
 positive, there is a rate mismatch to engineer away.
+
+## A radio that goes blind — stops sending readable STATs (open, reported in 0.4.9)
+
+Site 5's Obývák (2c:6a:6f:10:3a:ce) sent its **last readable STAT at 2026-10-08 22:43:09**, an
+hour after `21:40:40 STMu -> mode=stop`, and then in the 2026-10-09 00:58–01:43 window played
+**12 tracks with zero STAT-derived log lines** while the session stayed open — so the 90 s
+`SESSION_SILENCE` reaper never fired and something kept arriving on the socket.
+
+Consequences, and the third one is the bad one:
+
+- the `playing:` progress lines stop, so `in_buf` and the backlog are invisible;
+- `mode` freezes at whatever it last said;
+- **`recover_if_stalled` is silently disabled.** The 0.3.8 guard requires
+  `p.stat_seq > self._stall_seq[key]`, i.e. a STAT *after* the underrun — and no STAT ever
+  arrives again. A protection that turns itself off without saying so is worse than none.
+
+A restart cures it (new session, the radio re-announces itself), which is why it is easy to
+miss. 0.4.9 adds the two reports that were DEBUG-only — unrecognised frame kinds and runt
+STATs, once per kind per session — plus `warn_if_blind()` after `STAT_SILENCE = 120 s`.
+
+⚠️ **This was the third time the answer sat at DEBUG** (librespot stderr → 0.3.4, the Icecast
+stats failure → 0.4.8, this → 0.4.9). The logger level is hardcoded INFO and cannot be raised
+from the add-on options, so a diagnostic written at DEBUG is a diagnostic that does not exist.
+Write it at INFO, once, and say what the consequence is.
+
+**Status 2026-10-09:** 0.4.9 is live at site 5 (`05:27:12`, `idle_timeout=120s`,
+`buffer=4.0s`). The first 40 s showed only the handshake `SETD` frames (see the protocol
+section — they carry the radio's name and are benign), and no playback happened in that window,
+so the question is still open. What to look for in the next log with real playback:
+the frame-kind line for Obývák, the blind warning, and `Icecast backlog +N B/s`.
 
 ## ⚠️ `idle_timeout` must exceed the pipeline lag, or songs get cut off
 
@@ -457,6 +489,24 @@ Verified: 60 s continuous play, `bytes_rx` 1.46 MB, `in_buf` steady ~62 KB, zero
   **plus the `strm-t` heartbeat** in `slimproto.py` is required to hold the connection.
 - **STAT frames are 51 bytes, not 53** — this fw omits the trailing `error_code`. `_on_stat` tries
   the long layout, then the short one. (`elapsed_seconds` is field 11, `elapsed_ms` field 13.)
+- **The only other frame it sends is `SETD`, and it carries the radio's own name** (0.4.9's
+  frame report, site 5, 2026-10-09). One per player, right after the handshake, and nothing
+  else for the rest of the session:
+
+  ```
+  05:27:17 LARA 2c:6a:6f:10:3a:c6 sends b'SETD' frames (18 B)   "LARA koupelna"     (13)
+  05:27:20 LARA 00:0a:59:f2:2c:3c sends b'SETD' frames (21 B)   "LARA koup. patro"  (16)
+  05:27:26 LARA 2c:6a:6f:10:3a:ce sends b'SETD' frames (16 B)   "LARA Obývák"       (11, cp1250)
+  ```
+
+  The payload lengths differ by exactly the differences between the three names, so it is the
+  answer to our `setd 0x00` (player name) — currently dropped on the floor. Worth wiring up:
+  it is a **second, scan-free source of the user-assigned name**, which today only the TCP
+  61695 sweep provides. That would name a radio that dials in on :3483 without having been
+  discovered (the "it follows LARA All but gets no device until you restart" case, and the one
+  install where the sweep's reliability is unknown).
+  It also means `SETD` is **not** what the blind Obývák was sending instead of STATs — on a
+  healthy session it appears once and never again.
 - **The LARA does open the LMS CLI connection on :9595** — confirmed, open question #4 answered.
   Observed session, verbatim: `login admin elkoep` → `<mac> artist ?` → `<mac> stop` →
   `<mac> mixer volume 95` → then `<mac> playlist tracks ?` **while it is playing**, roughly every
