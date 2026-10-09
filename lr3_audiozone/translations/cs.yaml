@@ -59,7 +59,7 @@ configuration:
       Nepovinné. „LARA All" hraje do všech rádií; tímhle vzniknou další Spotify zařízení
       pro ručně vybrané sady — třeba „Dovnitř" jen s koupelnou a obývákem. Rádia pojmenuj
       tak, jak se jmenují v aplikaci Spotify; na předponě „LARA " ani na velikosti písmen
-      nezáleží. Skupina potřebuje aspoň dvě existující rádia, jinak se přeskočí a v logu
+      nezáleží. Skupina potřebuje aspoň dvě existující rádia a nesmí vyjmenovat všechna — to už je „LARA All" — jinak se přeskočí a v logu
       je napsáno proč. Puštění jedné konkrétní místnosti má pořád přednost před skupinou.
   lara_name_prefix:
     name: Přidat před názvy „LARA"

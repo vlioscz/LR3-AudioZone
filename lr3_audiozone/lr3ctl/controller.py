@@ -315,6 +315,11 @@ class Controller:
             if len(macs) < 2:
                 log.warning("group %r needs at least two radios that exist; skipping it", name)
                 continue
+            if len(self.radios) > 1 and set(macs) == set(self.radios):
+                log.warning("group %r covers every radio, which is what %r already does — "
+                            "skipping it; a group is for picking *some* of the rooms",
+                            name, self.group_name)
+                continue
             out.append(Zone(f"grp{i + 1}", name, macs))
         return out
 

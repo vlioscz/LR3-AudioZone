@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.5
+
+- A group that lists **every** radio is now refused, with a note in the log saying why: that
+  is exactly what "LARA All" already does, and a second device for it would only be another
+  name for the same thing. Groups are for picking *some* of the rooms.
+
 ## 0.4.4
 
 - **New: your own groups of rooms.** "LARA All" has always been all-or-nothing. You can now

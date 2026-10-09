@@ -61,7 +61,8 @@ configuration:
       hand-picked sets, for instance one called "Inside" containing only the bathroom and
       the living room. Name each radio the way it appears in the Spotify app - the "LARA "
       prefix and capitals do not matter. A group needs at least two radios that actually
-      exist, otherwise it is skipped and the log says why. Picking a single room still
+      exist and must not list all of them — that is "LARA All" already — otherwise it is skipped
+      and the log says why. Picking a single room still
       beats any group it belongs to.
   lara_name_prefix:
     name: Prefix names with "LARA"
