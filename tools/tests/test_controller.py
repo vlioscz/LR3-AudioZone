@@ -331,7 +331,7 @@ async def run():
     # names are matched the way a person types them, and nonsense is refused rather than
     # silently producing a device that drives the wrong rooms
     loose = mk({"groups": [{"name": "X", "radios": ["  koupelna ", "obývák"]}]},
-               radios=[(A, "Koupelna"), (B, "Obývák")])
+               radios=[(A, "Koupelna"), (B, "Obývák"), (C3, "Terasa")])
     assert sorted(next(z for z in loose.zones if z.name == "X").radios) == sorted([A, B])
     bad = mk({"groups": [{"name": "Y", "radios": ["Koupelna", "Neexistuje"]},
                          {"name": "", "radios": ["Koupelna", "Obývák"]}]},
