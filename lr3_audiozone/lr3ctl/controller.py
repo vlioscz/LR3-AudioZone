@@ -69,6 +69,13 @@ REPUSH_COOLDOWN = 15.0
 # next. Harmless until 0.4.3; now that a mount change terminates the old stream properly, each
 # bounce costs a real re-buffer, and the customer feels it as "switching took ages".
 ZONE_SETTLE = 3.0
+# `zone_off` ends with `strm-q`, which makes the LARA **flush** whatever it has buffered and
+# not yet played (it answers STMf). The radio is several seconds behind the app — its own
+# buffer alone holds ~5 s at 192 kbps, and the backlog in Icecast grows on top of that; ~30 s
+# was measured after an hour of listening. So an idle timeout shorter than that lag throws
+# away the tail of whatever was playing, which is heard as songs being cut off before they
+# end. Warn below this; it is not a hard limit because a short timeout is useful for testing.
+IDLE_TIMEOUT_FLOOR = 45
 # When a radio drops its SlimProto session we go and ask whether the unit is still alive at
 # all. Three TCP handshakes per port, spread over two minutes, then we stop — a wedged radio
 # costs nothing to probe and a healthy one must not be hammered.
@@ -838,6 +845,12 @@ class Controller:
                  "buffer=%.1fs (%d KB @ %d kbps)",
                  os.environ.get("LR3_VERSION", "?"), self.mode, self.our_ip, self.idle_timeout,
                  self.buffer_seconds, self.buffer_kb, self.bitrate)
+        if 0 < self.idle_timeout < IDLE_TIMEOUT_FLOOR:
+            log.warning("idle_timeout is %ds. Switching a zone off flushes whatever the radio "
+                        "has buffered but not yet played, and it runs several seconds — "
+                        "sometimes tens of seconds — behind the app, so a timeout this short "
+                        "cuts the ends off songs. %ds or more is safer.",
+                        self.idle_timeout, IDLE_TIMEOUT_FLOOR)
         if self.remote_access:
             log.info("Spotify remote access is ON — the last account to select a zone stays "
                      "logged in and sees it from anywhere, not just on this network")

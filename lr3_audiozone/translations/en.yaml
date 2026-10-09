@@ -90,11 +90,13 @@ configuration:
       and nothing else. If the music stops every half hour, the Output sample rate is the setting
       to look at, not this one.
   idle_timeout:
-    name: Power-off delay (s)
+    name: Seconds of silence before the radio leaves the zone
     description: >-
-      How many seconds Spotify has to stay idle (paused/stopped) before the LARA leaves the
-      audio zone and returns to its station list. This is the delay for which the zone stays
-      on the display after the music stops. Track changes do not count as a pause.
+      How long Spotify has to be quiet before the radio is released back to its own
+      controls. Do not set this low. Ending a zone makes the radio discard audio it has
+      received but not played yet, and it is always several seconds behind the app, so a
+      short timeout chops the last seconds off songs. 60 is a good value; below 45 the
+      add-on will warn you.
   control_mode:
     name: LARA control
     description: >-

@@ -86,11 +86,12 @@ configuration:
       nenabere, ať mu pošleme cokoli, takže nad ~2,7 s se mění jen to čekání. Když se hudba
       zastavuje každou půlhodinu, kouká se na Vzorkovací frekvenci výstupu, ne sem.
   idle_timeout:
-    name: Prodleva vypnutí (s)
+    name: Vteřin ticha, než rádio opustí zónu
     description: >-
-      Kolik sekund musí být Spotify v klidu (pauza/stop), než LARA opustí audio zónu a vrátí
-      se na seznam rádií. Tohle je ta prodleva, po kterou zóna po zastavení hudby ještě visí
-      na displeji. Přechod mezi skladbami ji nevypne — ten se jako pauza nepočítá.
+      Jak dlouho musí být ve Spotify ticho, než se rádio vrátí pod vlastní ovládání.
+      Nedávej sem málo. Ukončení zóny rádiu zahodí zvuk, který už dostalo, ale ještě
+      nepřehrálo — a rádio je vždycky o několik vteřin pozadu za aplikací, takže krátký
+      čas usekává konce skladeb. 60 je rozumná hodnota; pod 45 tě addon upozorní.
   control_mode:
     name: Ovládání LARA
     description: >-

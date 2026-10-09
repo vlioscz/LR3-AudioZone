@@ -224,6 +224,27 @@ family of theories built around pushes, parks and recovery. 0.4.2 adds the measu
 missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
 whether the unit was still alive.
 
+## ⚠️ `idle_timeout` must exceed the pipeline lag, or songs get cut off
+
+`zone_off` ends with `strm-q`, and this firmware answers `STMf` — it **flushes** everything it
+has buffered and not yet played. The listener is always behind the app:
+
+| stage | lag |
+|---|---|
+| Liquidsoap `input.external` | 0.4 s |
+| Icecast backlog | grows; ~25 s measured after an hour |
+| the LARA's own `in_buf` (pinned at ~130 KB since 48 kHz) | 5.4 s @ 192 kbps |
+
+So if the timeout is shorter than that total, the tail of whatever was playing is thrown away.
+Site 5 ran `idle_timeout` 20 s and the customer reported *"no song ever finishes, the sound
+always stops before the end"* — the lag was ~30 s, so the last ~10 s of each track went in the
+flush. It only bites when something interrupts playback mid-track (there, librespot losing its
+Spotify context), because that is when the timeout fires at all.
+
+0.4.6 warns below `IDLE_TIMEOUT_FLOOR` (45 s). **Note the interaction with 48 kHz**: before it,
+the buffer was always near-empty and the lag was ~2 s, so a short timeout was harmless. Fixing
+the underruns is what made the radio sit on a full buffer — and made this visible.
+
 ## Switching a playing radio to another mount (fixed in 0.4.3)
 
 `push_stream` used to send `strm-s` with the new URL straight at a player that was already

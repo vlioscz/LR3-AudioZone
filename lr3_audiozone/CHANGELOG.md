@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.6
+
+- **A short idle timeout cuts the ends off songs — the add-on now says so.** Switching a zone
+  off tells the radio to throw away everything it has buffered and not yet played, and the
+  radio runs several seconds behind the app (sometimes tens of seconds after a long session).
+  If the timeout is shorter than that lag, the last seconds of whatever was playing are
+  discarded. Anything under 45 seconds now produces a warning in the log, and the setting's
+  description explains the trade-off.
+
 ## 0.4.5
 
 - A group that lists **every** radio is now refused, with a note in the log saying why: that
