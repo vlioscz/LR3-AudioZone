@@ -27,8 +27,8 @@ configuration:
   rate_match:
     name: Send at the radio's own pace
     description: >-
-      Leave this at auto. No LARA plays at exactly the speed it is sent - at 48000 the ones
-      measured run about 0.33 % slow - so audio sent in exact real time piles up in front of
+      Leave this at auto. No LARA plays at exactly the speed it is sent - the ones measured
+      were about 0.33 % off - so audio sent in exact real time piles up in front of
       the radio: after an hour it is twelve seconds behind the app, after two and a quarter
       hours the streaming server gives up on it and the music stops for a moment. With this on,
       the add-on watches how full each radio's buffer is and sends at whatever pace keeps it

@@ -27,8 +27,8 @@ configuration:
   rate_match:
     name: Posílat tempem rádia
     description: >-
-      Nech auto. Žádná LARA nehraje přesně tou rychlostí, jakou jí posíláme — ty změřené při
-      48000 hrají asi o 0,33 % pomaleji — takže zvuk posílaný přesně v reálném čase se před
+      Nech auto. Žádná LARA nehraje přesně tou rychlostí, jakou jí posíláme — u změřených to
+      byl rozdíl asi 0,33 % — takže zvuk posílaný přesně v reálném čase se před
       rádiem hromadí: po hodině je o dvanáct vteřin za aplikací a po dvou a čtvrt hodinách
       ho streamovací server odpojí a hudba na chvíli zmlkne. Se zapnutou volbou addon sleduje,
       jak plný má každé rádio buffer, a posílá takovým tempem, aby se držel na místě — zpoždění

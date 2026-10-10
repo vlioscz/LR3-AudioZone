@@ -73,7 +73,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `bitrate` | `192` | Bitrate MP3 posílaného do LARA (kbps). |
 | `spotify_bitrate` | `320` | Kvalita Spotify (96/160/320). Vyžaduje Premium. |
 | `samplerate` | `48000` | **Nech být.** Při 44100 každá změřená LARA spotřebovává zvuk asi o 39 B/s rychleji, než ho stíháme dodávat — buffer se jí vypustí a hudba se zhruba po 26 minutách zastaví, ať je buffer nastavený jakkoli. 48000 ten nesoulad maže; 44100 zůstává jen kvůli srovnání. |
-| `rate_match` | `auto` | **Nech `auto`** (= zapnuto). Posílá každou zónu tempem, jakým její rádia opravdu hrají — při 48 kHz jsou o ~0,33 % pomalejší — takže zpoždění zůstane kolem 5 s, místo aby rostlo o 12 s za hodinu, dokud rádio neodpojí. `off` = dosavadní engine (Liquidsoap, přesně reálný čas). |
+| `rate_match` | `auto` | **Nech `auto`** (= zapnuto). Posílá každou zónu tempem, jakým její rádia opravdu hrají — rádia a hodiny dřívějšího enginu se rozcházely o ~0,33 % — takže zpoždění zůstane kolem 5 s, místo aby rostlo o 12 s za hodinu, dokud rádio neodpojí. `off` = dosavadní engine (Liquidsoap, přesně reálný čas). |
 | `spotify_remote_access` | `false` | Vypnuto: neukládá se žádné přihlášení ke Spotify, zóny vidí všichni na tvé síti a nikdo mimo ni (vypnutím se dřív uložené přihlášení i smaže). Zapnuto: účet, který zónu vybral jako poslední, zůstane přihlášený a vidí ji odkudkoli — není to ale vlastnictví, zónu může kdokoli v síti pořád převzít. |
 | `audio_cache_mb` | `200` | Cache staženého audia na disku **na každou zónu** (0 = žádná). Do 0.3.7 to byl pevný 1 GB na každou — čtyři zóny znamenaly až 4 GB zápisů na připájené úložiště HA Green. |
 | `zone_name` | `Audio zóna` | Náhradní název — použije se, jen když se nenajde žádné rádio. |
@@ -144,9 +144,10 @@ nikdy nehrají a jediné, co to prozradí, je varování v logu.
 - ✅ **Přehození hudby z místnosti do místnosti** už nenechá rádio ztichnout (0.4.3) ani
   neškobrtá (0.4.4).
 - ✅ **Na displeji běží hrající skladba** — název a interpret jdou přes LMS CLI (:9595).
-- 🔧 **Zpoždění, které rostlo během dlouhého poslechu** — 12 s za hodinu, dokud rádio po
-  2 h 16 min nevypadlo — řeší 0.5.0 posíláním tempem rádií. Změřeno, nasimulováno
-  a vyzkoušeno na celé cestě; čeká se na potvrzení z reálného dlouhého poslechu.
+- ✅ **Zpoždění už během dlouhého poslechu neroste** (0.5.0, potvrzeno v provozu). Dřív
+  rostlo o 12 s za hodinu, dokud rádio po 2 h 16 min nevypadlo. Od chvíle, kdy addon
+  posílá tempem rádií, drží instalace se třemi rádii hodiny stabilní buffer a nulový
+  backlog, včetně relace 2 h 41 min.
 - 🔎 **Otevřené:** zatuhávání výše.
 - Testovací nástroj bez nasazení add-onu:
   `python tools/zone_test.py <ip-tohoto-stroje> --proxy <url-mp3-streamu>`

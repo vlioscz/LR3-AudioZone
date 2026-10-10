@@ -81,6 +81,8 @@ ZONE_SETTLE = 3.0
 IDLE_TIMEOUT_FLOOR = 45
 # How often to ask Icecast how far behind the radios are. Same cadence as the progress lines.
 BACKLOG_EVERY = 300.0
+# Monotonic vs wall clock disagreeing by more than this over one poll is worth a line.
+CLOCK_SKEW_NOTE = 300.0
 # A connected radio answers our 5 s heartbeat with a STAT. If its STAT counter stops moving
 # while the session is still open we are blind to it: no buffer figures, `mode` frozen, and
 # `recover_if_stalled` disabled, because that waits for a STAT after the stall. Say so.
@@ -145,6 +147,32 @@ def credentials_file(mount: str) -> str:
 def legacy_credentials_file(mount: str) -> str:
     """Where the login lived up to 0.3.4, mixed in with the audio cache."""
     return f"{audio_cache_dir(mount)}/credentials.json"
+
+
+S6_ENV_DIRS = ("/run/s6/container_environment", "/var/run/s6/container_environment")
+
+
+def supervisor_token() -> str | None:
+    """The token the Supervisor gives every add-on for its API.
+
+    It is set in the container's environment — but this image boots through s6-overlay (the HA
+    base image's /init), which starts our CMD with a scrubbed environment and keeps the
+    container's variables as files under /run/s6/container_environment instead. That is what
+    `#!/usr/bin/with-contenv` in other add-ons' scripts is for. 0.5.0 looked only at the
+    environment, found nothing, and the first site to try it got no sensors at all.
+    """
+    for name in ("SUPERVISOR_TOKEN", "HASSIO_TOKEN"):
+        if os.environ.get(name):
+            return os.environ[name]
+        for d in S6_ENV_DIRS:
+            try:
+                with open(os.path.join(d, name)) as f:
+                    tok = f.read().strip()
+            except OSError:
+                continue
+            if tok:
+                return tok
+    return None
 
 
 def host_ip() -> str:
@@ -269,7 +297,9 @@ class Controller:
         self._warned_offline: set[str] = set()
         self._log_offsets: dict[str, int] = {}     # mount -> bytes of its librespot log copied
         self._backlog_at = 0.0                     # last Icecast stats poll
+        self._backlog_wall = 0.0                   # the same, by the wall clock
         self._backlog_prev: dict[str, tuple] = {}  # mount -> (read, sent, listeners)
+        self._mount_pushed_at: dict[str, float] = {}  # mount -> when a radio last joined it
         self._probes: set[asyncio.Task] = set()    # liveness probes in flight
         self._backlog_warned = False
         self._stat_seen: dict[str, tuple] = {}     # mac -> (stat_seq, when it last moved)
@@ -277,7 +307,7 @@ class Controller:
         self._stopping = False
         # Home Assistant sensors. The Supervisor hands every add-on a token; with
         # `homeassistant_api: true` in config.yaml it also opens the Core API to it.
-        self.ha_token = os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN")
+        self.ha_token = supervisor_token()
         self._ha_sent: dict[str, tuple] = {}       # entity -> (state, attrs) HA last accepted
         self._ha_refresh_at = 0.0
         self._ha_retry_at = 0.0
@@ -791,6 +821,19 @@ class Controller:
         if now - self._backlog_at < BACKLOG_EVERY:
             return
         was, self._backlog_at = self._backlog_at, now
+        wall = time.time()
+        was_wall, self._backlog_wall = self._backlog_wall, wall
+        dt_wall = wall - was_wall if was_wall else 0.0
+        # The pacer keeps time by the monotonic clock; Liquidsoap kept it by the wall clock,
+        # which NTP corrects. On a well-behaved box they agree to a few ppm. At the first site
+        # on 0.5.0 the radios settled at "+600 ppm" by the pacer's clock where Liquidsoap had
+        # measured them at -3250 — a 0.38 % gap that only a disagreeing clock explains. Say
+        # so when it happens, so the next log settles it.
+        if dt_wall > 0 and was:
+            skew = ((now - was) / dt_wall - 1.0) * 1e6
+            if abs(skew) > CLOCK_SKEW_NOTE:
+                log.info("this machine's monotonic clock ran %+.0f ppm against its wall clock "
+                         "over the last %.0f s", skew, dt_wall)
         try:
             req = urllib.request.Request(
                 f"http://localhost:{self.port}/admin/stats.xml",
@@ -817,11 +860,19 @@ class Controller:
                     return None
             read, sent, lis = num("total_bytes_read"), num("total_bytes_sent"), num("listeners")
             if read is None or sent is None or not lis:
+                # Nobody listening: forget the old sample. Keeping it made the first reading
+                # of the next session compare against the last one of the previous evening —
+                # a whole night of source bytes and none sent, logged as +2.6 MB/s.
+                self._backlog_prev.pop(mount, None)
                 continue
             prev = self._backlog_prev.get(mount)
             self._backlog_prev[mount] = (read, sent, lis)
-            if not prev or prev[2] != lis or dt <= 0:
-                continue        # listener count changed: the comparison is not like for like
+            # Not like for like if the listener count changed, if a radio (re)joined this mount
+            # since the last poll — same count, different connections — or if Icecast's
+            # counters went backwards because the source reconnected.
+            if (not prev or prev[2] != lis or dt <= 0 or read < prev[0] or sent < prev[1]
+                    or self._mount_pushed_at.get(mount, -1e9) > was):
+                continue
             grew = (read - prev[0]) - (sent - prev[1]) / lis
             per_s = grew / dt
             # With rate_match on, this line is the proof it works: the backlog should read ~0
@@ -831,6 +882,10 @@ class Controller:
                 x = self._rate_x.get(mount)
                 steer = (f"; pacing {self.rate_ppm[mount]:+.0f} ppm" +
                          (f", radio buffer {x / 1024:.0f} KB" if x is not None else ""))
+            if dt_wall > 0:
+                # What actually left for the radios, per second of wall-clock time: with the
+                # buffer steady, this IS the radios' playback rate, whatever any clock says.
+                steer += f"; source {(read - prev[0]) / dt_wall:.0f} B/s"
             log.info("mount /%s: Icecast backlog %+.0f B/s (%+.1f s of audio per hour, "
                      "%d listener(s))%s", mount, per_s,
                      per_s * 3600 / max(1, self.bitrate * 1000 / 8), lis, steer)
@@ -999,6 +1054,7 @@ class Controller:
         # the radio a second time: part of why changing rooms felt slow.
         self._repushed_at[key] = time.monotonic()
         self._stall_seq.pop(key, None)
+        self._mount_pushed_at[mount] = time.monotonic()
         rec = self.radios.get(key, {}).get("rec", {})
         log.info("zone ON  %s (%s) -> /%s [%s]", rec.get("name", key), rec.get("ip", "?"),
                  mount, self.zone_names.get(mount, mount))
@@ -1275,7 +1331,8 @@ class Controller:
                      "radios run %+.0f ppm off that, which builds up as lag",
                      self.samplerate, self.default_ppm())
         if not self.ha_token:
-            log.info("no Supervisor token — the Home Assistant sensors are disabled")
+            log.warning("no Supervisor token, neither in the environment nor in %s — the Home "
+                        "Assistant sensors are disabled", S6_ENV_DIRS[0])
         if not self.remote_access:
             if not self.cred_cache_flag_ok:
                 log.warning("this librespot does not know --disable-credential-cache, so it "

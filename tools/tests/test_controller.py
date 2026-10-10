@@ -166,6 +166,7 @@ async def run():
     class Clock:
         t = 10_000.0
         def monotonic(self): return self.t
+        def time(self): return 1.7e9 + self.t
         def advance(self, dt): self.t += dt
     clk = Clock()
     real_time = C.time
@@ -645,6 +646,71 @@ async def run():
     C.log.removeHandler(h)
     assert sum("Home Assistant sensors" in m for m in said) == 1, said
     print("41) one sensor per radio, posted on change, refreshed, failures reported once")
+
+    # The add-on boots through s6-overlay, which hides the container environment from our CMD
+    # and keeps it as files. 0.5.0 looked only at the environment: no sensors, first site.
+    s6 = tempfile.mkdtemp(prefix="s6env_")
+    saved_dirs, saved_env = C.S6_ENV_DIRS, {k: os.environ.pop(k, None)
+                                           for k in ("SUPERVISOR_TOKEN", "HASSIO_TOKEN")}
+    C.S6_ENV_DIRS = (s6,)
+    assert C.supervisor_token() is None
+    open(os.path.join(s6, "SUPERVISOR_TOKEN"), "w").write("abc123\n")
+    assert C.supervisor_token() == "abc123"
+    os.environ["SUPERVISOR_TOKEN"] = "fromenv"
+    assert C.supervisor_token() == "fromenv", "the environment still wins when it has it"
+    C.S6_ENV_DIRS = saved_dirs
+    for k, v in saved_env.items():
+        os.environ.pop(k, None)
+        if v is not None:
+            os.environ[k] = v
+    print("42) the Supervisor token is found where s6-overlay keeps it")
+
+    # The backlog line compared sessions that had nothing to do with each other: a poll from
+    # the evening against one from the next morning (+2.6 MB/s), or one from before a quick
+    # off/on against one after it (same listener count, different connections).
+    ctl = mk(radios=[(A, "Koupelna")])
+    m = ctl.mount_for(A)
+    xml = {"v": ""}
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return xml["v"].encode()
+    saved_open = C.urllib.request.urlopen
+    C.urllib.request.urlopen = lambda req, timeout=5: Resp()
+    C.time = clk
+
+    def poll(read, sent, lis, pushed=False):
+        xml["v"] = (f"<icestats><source mount='/{m}'><total_bytes_read>{read}</total_bytes_read>"
+                    f"<total_bytes_sent>{sent}</total_bytes_sent><listeners>{lis}</listeners>"
+                    f"</source></icestats>")
+        if pushed:                                   # a radio joined between the two polls
+            clk.advance(10); ctl._mount_pushed_at[m] = clk.monotonic()
+        clk.advance(C.BACKLOG_EVERY)
+        said.clear(); C.log.addHandler(h)
+        ctl.measure_backlog()
+        C.log.removeHandler(h)
+        return [s for s in said if "backlog" in s]
+    poll(1_000_000, 900_000, 1)
+    assert poll(1_000_000 + 24000 * 300, 900_000 + 24000 * 300, 1), "a normal reading is logged"
+    poll(9_000_000, 8_000_000, 0)                    # zone off overnight
+    assert poll(30_000_000, 8_100_000, 1) == [], "first poll of a new session: no comparison"
+    assert poll(30_000_000 + 7_200_000, 8_100_000 + 7_100_000, 1, pushed=True) == [], \
+        "a radio rejoined since the last poll: not like for like"
+    line = poll(30_000_000 + 2 * 7_200_000, 8_100_000 + 7_100_000 + 7_200_000, 1)
+    assert line and "source 24000 B/s" in line[0], line
+    # The two clocks disagreeing (the suspected cause of "+600 ppm" at the first site) is said.
+    real_wall = clk.time
+    clk.time = lambda: 1.7e9 + clk.t * (1 - 0.0038)
+    said.clear(); C.log.addHandler(h)
+    clk.advance(C.BACKLOG_EVERY); ctl.measure_backlog()
+    clk.advance(C.BACKLOG_EVERY); ctl.measure_backlog()
+    C.log.removeHandler(h)
+    assert any("monotonic clock ran +38" in s for s in said), said
+    clk.time = real_wall
+    C.urllib.request.urlopen = saved_open
+    C.time = real_time
+    print("43) the backlog is only compared within one unbroken listening session")
 
 
 asyncio.run(run())

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1
+
+- **The Home Assistant sensors now actually appear.** 0.5.0 looked for its access token
+  only in the environment, but Home Assistant starts this add-on through s6-overlay, which
+  keeps the environment in files instead — so the add-on found no token, said so once in the
+  log, and never created a single sensor. It now looks there too.
+- **First result from a real installation for the new pacing:** on a three-radio install the
+  radios' buffer has held at about 108 KB and the streaming server's backlog at zero for
+  hours on end, including a session of 2 h 41 min — the previous version dropped the radios
+  after 2 h 16 min, every time. Room changes are pushed once.
+- The five-minute backlog line no longer prints absurd figures (+2.6 MB/s) for the first
+  reading after the radios rejoin — it was comparing against a sample from the evening
+  before. It also shows the bytes per second actually sent, and says so if the machine's two
+  clocks disagree: that is the likeliest explanation for why the new engine settled at a
+  slightly different rate on that site than the old one had measured.
+
 ## 0.5.0
 
 - **The delay that grew during long listening is fixed.** Measured on a three-radio install:

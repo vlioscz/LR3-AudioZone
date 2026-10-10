@@ -37,10 +37,11 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.0.** It replaced Liquidsoap in the zone path with `pacer.py` to fix
-  the growing lag (the radios run 0.33 % slow — measured, see below), added one HA sensor per
-  radio, and fixed a double push on every room change. Still open: the **KP2 freeze** at
-  site 5, and **field confirmation** that the backlog stays at ~0 with rate_match on.
+- **Current version 0.5.1.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+  fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
+  ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
+  per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
+  Still open: the **KP2 freeze** at site 5, and the clock question in the lag section.
 
 ## Repo layout
 
@@ -276,6 +277,23 @@ in the zone path (`rate_match`, default `auto` = on; `off` restores Liquidsoap u
 
 ⚠️ Do **not** lower Icecast's `queue-size` as a "fix" for this — it only shortens the cycle.
 
+**Field result, 0.5.0 on the same install (2026-10-09 14:37 → 10-10 09:25):** 76 backlog
+readings at −4…+5 B/s, radio buffer 108–110 KB, no STMu at all, a 15:17–17:58 session of
+2 h 41 min. **But the loop settled at +500…+800 ppm, not −3250.** Measured in Docker on a PC,
+both engines are exact at nominal (pacer +117 ppm, Liquidsoap +20 ppm over 300 s), so on that
+HA box one of them is off by ~0.38 %. Best explanation: the two clocks disagree there —
+Liquidsoap paced by the wall clock (NTP-corrected), the pacer by CLOCK_MONOTONIC, and NTP can
+only slew frequency by ±500 ppm, so a clock off by more than that is *stepped*, which corrects
+the wall clock and not the monotonic one. Supporting it: the radios' `bytes_rx` over wall time
+on 0.5.0 is 23 923 B/s, exactly the −3250 ppm first measured. Not proven — 0.5.1 logs the
+actual source B/s per wall second and a line when the two clocks disagree by >300 ppm.
+**It does not matter for function**: the loop steers by the radio's buffer, whichever clock is
+wrong. It only means `DEFAULT_PPM` is a starting guess, and the learned value per mount is
+what counts (seen: −2259 → +95 → ~+600 within the first hour).
+
+The `bytes_rx` counter itself is not trustworthy as a rate: on 0.4.9 (Liquidsoap) it climbed
+at ~30.4 KB/s once the radio's buffer was full, which no 24 kB/s source can deliver.
+
 ## The lag that grows over a session (history — the analysis before the measurement)
 
 Reported from the third-party install: after ~an hour of playing, switching took about 30 s;
@@ -429,7 +447,14 @@ another one. Do not blind-write anything else over 61695.
 ## Home Assistant sensors (0.5.0)
 
 One `sensor.lr3_lara_<last 6 MAC hex>` per radio, posted through the Supervisor's Core API
-(`homeassistant_api: true`, `SUPERVISOR_TOKEN`). State = the Spotify device (zone name) the
+(`homeassistant_api: true`, `SUPERVISOR_TOKEN`).
+
+⚠️ **The token is not in our environment.** The HA base image boots through s6-overlay v3
+(`/init`, visible in the log as `s6-rc: info: …`), which runs our CMD with a scrubbed
+environment and keeps the container's variables as files in `/run/s6/container_environment/`
+— that is what `with-contenv` does for other add-ons. 0.5.0 read only `os.environ`, logged
+"no Supervisor token" and created nothing; found at the first site. `supervisor_token()`
+checks both since 0.5.1. Anything else from the container environment has the same problem. State = the Spotify device (zone name) the
 radio is pushed to (`self.target`), or `off`; attributes radio/mount/spotify(playing|idle)/
 mac/ip. Posted on change from a background task (blocking urllib in a thread — never on the
 loop that carries the heartbeat), re-posted every 5 min because HA forgets API-set states on

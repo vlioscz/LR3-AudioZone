@@ -5,8 +5,8 @@ z nich hrají. Cíl je, aby o tom rozhodovalo, **které zařízení si člověk 
 Například „LARA Terasa“ pustí jen reproduktory u sezení, „LARA All“ k tomu přidá i ty
 u bazénu.
 
-Addon od verze 0.5.0 dává do Home Assistantu ke každému rádiu senzor. Relé pak přepne
-obyčejná automatizace v HA.
+Addon od verze 0.5.1 dává do Home Assistantu ke každému rádiu senzor (0.5.0 ho kvůli chybě
+nevytvořil). Relé pak přepne obyčejná automatizace v HA.
 
 ## 1. Senzor
 
@@ -113,7 +113,13 @@ Při vypnutí zóny je to stejné.
 
 ## 5. Když senzory nejsou vidět
 
-V logu addonu hledej řádek `cannot update the Home Assistant sensors (…)`. V závorce je
-důvod. Addon potřebuje přístup k API Home Assistantu, který si od verze 0.5.0 sám vyžádá
+Nejdřív zkontroluj verzi: senzory fungují až od **0.5.1**. Pak hledej v logu addonu:
+
+- `Home Assistant sensors: sensor.lr3_lara_…`: senzory existují, hledej je ve
+  **Vývojářské nástroje → Stavy**,
+- `no Supervisor token …`: addon nedostal přístup k API,
+- `cannot update the Home Assistant sensors (…)`: API ho odmítlo, důvod je v závorce.
+
+Addon potřebuje přístup k API Home Assistantu, který si od verze 0.5.0 sám vyžádá
 v konfiguraci. Pokud to po aktualizaci nefunguje, pomůže addon jednou restartovat.
 Přehrávání chyba senzorů nijak neovlivní.
