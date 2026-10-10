@@ -78,7 +78,7 @@ The SlimProto port is 3483.
 | `bitrate` | `192` | Bitrate of the MP3 sent to the LARA (kbps). |
 | `spotify_bitrate` | `320` | Spotify quality (96/160/320). Needs Premium. |
 | `samplerate` | `48000` | **Leave this alone.** At 44100 every LARA measured consumes audio about 39 B/s faster than we can deliver it, so its buffer bleeds out and the music stops roughly every 26 minutes — whatever the buffer is set to. 48000 removes the mismatch; 44100 is kept only for comparison. |
-| `rate_match` | `auto` | **Leave at `auto`** (= on). Sends each zone at the pace its radios really play — the radios and the old engine's clock were ~0.33 % apart — so the delay stays at about 5 s instead of growing by 12 s an hour until the radio is dropped. `off` = the previous engine (Liquidsoap, exact real time). |
+| `rate_match` | `auto` | **Leave at `auto`** (= on). Sends each zone at the pace its radios really play, so the delay stays at about 5 s instead of growing by 12 s an hour until the radio is dropped. `off` = the previous engine (Liquidsoap, exact real time). |
 | `spotify_remote_access` | `false` | Off: no Spotify login is stored, zones are visible to everyone on your network and to nobody outside it (turning it off also deletes a login stored earlier). On: the last account to select a zone stays logged in and sees it from anywhere — which is not ownership, anyone on the network can still take the zone over. |
 | `audio_cache_mb` | `200` | Spotify audio cached on disk **per zone** (0 = none). It was a fixed 1 GB each until 0.3.7 — four zones meant up to 4 GB written to the HA Green's soldered storage. |
 | `zone_name` | `Audio zóna` | Fallback name — used only when no radio is found. |

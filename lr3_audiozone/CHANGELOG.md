@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.2
+
+- **The pacing now sends exactly what it means to.** Every time the add-on nudged a zone's
+  rate — every few seconds — the pacing quietly dropped the slice of audio that had just come
+  due, about 0.5 % of the stream in all. The steering made up for it, so nothing was audible
+  and the delay held steady, but every rate it reported and learned was off by that much. The
+  new log line from 0.5.1 is what showed it: the radios were taking 23 885 B/s while the
+  pacing believed it was sending 24 014. Rates learned by 0.5.0 and 0.5.1 are discarded on
+  update, so the first few minutes of each zone re-learn them.
+- The descriptions no longer give a percentage for how far the radios are off: the 0.33 %
+  quoted before was measured against the old engine, which turned out to be slightly off
+  itself on that machine. Measured directly, the radios play about 0.5 % slow at 48 kHz.
+
 ## 0.5.1
 
 - **The Home Assistant sensors now actually appear.** 0.5.0 looked for its access token

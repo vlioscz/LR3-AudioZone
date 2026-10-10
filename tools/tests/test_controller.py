@@ -592,7 +592,13 @@ async def run():
     assert abs(again.rate_base[mine] - ctl.rate_base[mine]) < 0.1
     other = C.Controller({"samplerate": 44100})
     other.load_rates()
-    assert other.rate_base == {} and other.default_ppm() == 1640.0
+    assert other.rate_base == {} and other.default_ppm() == 0.0
+    # A file from 0.5.0/0.5.1 was learned through the lossy pacer: ~5000 ppm off. Ignore it.
+    old = os.path.join(C.DATA_DIR, "rate_ppm.json")
+    data = __import__("json").load(open(old)); data.pop("v")
+    __import__("json").dump(data, open(old, "w"))
+    stale = C.Controller({}); stale.load_rates()
+    assert stale.rate_base == {}, "rates saved by the 0.5.0 pacer must not be reused"
     off = C.Controller({"rate_match": "off"})
     assert not off.rate_match and C.Controller({"rate_match": "on"}).rate_match
     print("39) learned rates are kept across restarts at the same sample rate only")
@@ -607,8 +613,8 @@ async def run():
     for flag in ("--backend", "pipe", "--format", "S16", "--enable-volume-normalisation",
                  "--onevent", "/etc/lr3/spotify_event.sh", "--system-cache"):
         assert flag in argv, flag
-    assert cfg["initial_ppm"] == -3250.0 and cfg["samplerate"] == 48000
-    assert float(open(cfg["rate_file"]).read()) == -3250.0
+    assert cfg["initial_ppm"] == -4800.0 and cfg["samplerate"] == 48000
+    assert float(open(cfg["rate_file"]).read()) == -4800.0
     print("40) the pacer is configured with librespot's own flags and the starting rate")
 
     # Home Assistant sensors: one per radio, the Spotify device it plays or "off". Posted when

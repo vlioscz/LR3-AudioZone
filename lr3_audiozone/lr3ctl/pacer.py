@@ -79,17 +79,23 @@ class Pacer:
     def _clamp(ppm: float) -> float:
         return max(-PPM_LIMIT, min(PPM_LIMIT, float(ppm)))
 
+    def _target(self, now: float) -> float:
+        return self._n0 + (now - self._t0) * self.rate * (1.0 + self.ppm / 1e6)
+
     def set_ppm(self, ppm: float, now: float):
         ppm = self._clamp(ppm)
         if ppm != self.ppm:
-            # Re-anchor at the current position, so a new rate applies from here on and does
-            # not retroactively make a slab of audio due (or overdue) at once.
-            self._t0, self._n0 = now, self.emitted
+            # Re-anchor where the OLD rate had got to by now, so the new one applies from here
+            # on without rewriting the past. 0.5.0 anchored at `emitted` instead, which quietly
+            # forgave whatever had come due since the last tick — ~25 ms, every time the
+            # controller nudged the rate, i.e. every 5 s. That is 0.5 % of the output, and it
+            # is exactly what the first site showed: the loop settled at "+600 ppm" while
+            # Icecast counted 23 885 B/s actually leaving (-4800).
+            self._t0, self._n0 = now, self._target(now)
             self.ppm = ppm
 
     def due(self, now: float) -> int:
-        target = self._n0 + (now - self._t0) * self.rate * (1.0 + self.ppm / 1e6)
-        behind = target - self.emitted
+        behind = self._target(now) - self.emitted
         if behind > FORGIVE * self.rate:
             # We were not scheduled for a while (a stalled disk, a busy box). Paying the whole
             # debt at once would be mostly silence — librespot keeps only ~0.4 s in its pipe —

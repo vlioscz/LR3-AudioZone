@@ -100,10 +100,15 @@ MUZZLE_NAG_EVERY = 600.0
 PACER = "/opt/lr3ctl/pacer.py"
 RATE_MATCH_AUTO = True    # what `rate_match: auto` means in this release
 # Where a newly seen mount starts, by output sample rate, before the buffer readings take over.
-# Measured, not guessed: at 48 kHz the radios took ~78 B/s less than the 24 000 B/s we send
-# (2026-10-09, two radios, two hours, 22 readings); at 44.1 kHz they took ~39 B/s more
-# (2026-09-30, three radios). Positive = send faster.
-DEFAULT_PPM = {48000: -3250.0, 44100: 1640.0}
+# Positive = send faster. 48 kHz is measured directly: with the buffer held steady, Icecast
+# counted 23 885 B/s leaving for the radios per wall-clock second, three hours running
+# (2026-10-10, 0.5.1, 28 readings) — -4800 ppm. The earlier -3250 was relative to Liquidsoap,
+# which on that box evidently did not deliver exactly 24 000 B/s either. 44.1 kHz has only
+# ever been measured against Liquidsoap, so it starts from nothing and is learned.
+DEFAULT_PPM = {48000: -4800.0, 44100: 0.0}
+# Bumped when saved rates stop meaning what they meant: 0.5.0/0.5.1 learned theirs through a
+# pacer that lost ~0.5 % on every rate change, so those numbers are ~5000 ppm too high.
+RATE_FILE_VERSION = 2
 RATE_EVERY = 5.0          # one steering decision per heartbeat, which is how often STATs come
 RATE_FRESH = 15.0         # a buffer reading older than this is not used
 # Aim the radio's own buffer this far below full. A full buffer is the one state we cannot
@@ -643,15 +648,16 @@ class Controller:
     def load_rates(self):
         """Start from what this site's radios taught us last time, not from the default.
 
-        Only when the output sample rate is unchanged: the radios' offset is a property of the
-        rate they are fed (opposite signs at 44.1 and 48 kHz), so an old value would be wrong.
+        Only when the output sample rate is unchanged — the radios' offset depends on the rate
+        they are fed — and only from a file written by a pacer that counts the same way.
         """
         try:
             with open(os.path.join(DATA_DIR, "rate_ppm.json")) as f:
                 saved = json.load(f)
         except (OSError, ValueError):
             return
-        if saved.get("samplerate") != self.samplerate or saved.get("bitrate") != self.bitrate:
+        if (saved.get("v") != RATE_FILE_VERSION or saved.get("samplerate") != self.samplerate
+                or saved.get("bitrate") != self.bitrate):
             return
         for mount, ppm in (saved.get("ppm") or {}).items():
             try:
@@ -668,7 +674,8 @@ class Controller:
         try:
             path = os.path.join(DATA_DIR, "rate_ppm.json")
             with open(path + ".tmp", "w") as f:
-                json.dump({"samplerate": self.samplerate, "bitrate": self.bitrate,
+                json.dump({"v": RATE_FILE_VERSION, "samplerate": self.samplerate,
+                           "bitrate": self.bitrate,
                            "ppm": {m: round(p, 1) for m, p in self.rate_base.items()}}, f)
             os.replace(path + ".tmp", path)
         except OSError:
@@ -825,10 +832,10 @@ class Controller:
         was_wall, self._backlog_wall = self._backlog_wall, wall
         dt_wall = wall - was_wall if was_wall else 0.0
         # The pacer keeps time by the monotonic clock; Liquidsoap kept it by the wall clock,
-        # which NTP corrects. On a well-behaved box they agree to a few ppm. At the first site
-        # on 0.5.0 the radios settled at "+600 ppm" by the pacer's clock where Liquidsoap had
-        # measured them at -3250 — a 0.38 % gap that only a disagreeing clock explains. Say
-        # so when it happens, so the next log settles it.
+        # which NTP corrects. They should agree to a few ppm, and at the first site they did —
+        # this line is what ruled the clocks out when the pacer settled ~5000 ppm off (that
+        # turned out to be the pacer losing a tick per rate change, fixed in 0.5.2). Kept,
+        # because a box whose clocks do disagree would mislead every rate we learn.
         if dt_wall > 0 and was:
             skew = ((now - was) / dt_wall - 1.0) * 1e6
             if abs(skew) > CLOCK_SKEW_NOTE:

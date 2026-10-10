@@ -28,6 +28,26 @@ want = elapsed * 44100 * (1 - 3250e-6)
 assert abs(total - want) < 44100 * 0.12, (total, want)
 print(f"pacer: {elapsed:.0f} s at -3250 ppm -> {total} frames, {total - want:+.0f} off the ideal")
 
+# --- the rate nudged every 5 s, as the controller does, on a slow ~27 ms loop -----------------
+# 0.5.0 re-anchored at what had been emitted and so forgave one tick per change: -0.5 % of the
+# output, which the first site showed as the loop settling ~5000 ppm away from the truth.
+import random  # noqa: E402
+rnd = random.Random(3)
+t, ideal, next_poll, ppm = 0.0, 0.0, 0.0, 500.0
+pc = P.Pacer(t, ppm=ppm)
+while t < 3600:
+    t += 0.027
+    if t >= next_poll:
+        next_poll = t + 1
+        if int(t) % 5 == 0:
+            ppm = 500 + rnd.uniform(-100, 100)
+        pc.set_ppm(ppm, t)
+    pc.took(pc.due(t))
+    ideal += 0.027 * 44100 * (1 + pc.ppm / 1e6)
+err = (pc.emitted / ideal - 1) * 1e6
+assert abs(err) < 5, f"{err:+.0f} ppm lost to rate changes"
+print(f"pacer: an hour of rate nudges every 5 s costs {err:+.1f} ppm (0.5.0 lost ~-5300)")
+
 # --- a rate change re-anchors: nothing becomes due retroactively ------------------------------
 pc = P.Pacer(0.0, ppm=0)
 pc.took(pc.due(10.0))

@@ -37,11 +37,12 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.1.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.2.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
-  Still open: the **KP2 freeze** at site 5, and the clock question in the lag section.
+  0.5.2 fixed the pacer losing ~0.5 % on every rate change (the "+600 ppm" puzzle).
+  Sensors confirmed in the field on 0.5.1. Still open: the **KP2 freeze** at site 5.
 
 ## Repo layout
 
@@ -267,7 +268,7 @@ in the zone path (`rate_match`, default `auto` = on; `off` restores Liquidsoap u
   the radio's reported `in_buf` (STAT, every 5 s), target `size − 20 KB` (~108 KB ≈ 4.6 s), the
   hungriest radio decides on a shared mount, clamp ±8000 ppm, learned base saved to
   `/data/rate_ppm.json` per mount (ignored if samplerate/bitrate changed). Starting points:
-  `DEFAULT_PPM = {48000: -3250, 44100: +1640}`.
+  `DEFAULT_PPM = {48000: -4800, 44100: 0}` (0.5.2; see the field result below).
 - **Pitch is untouched** — it is set by the radio's crystal, as before. `ppm` changes only how
   fast we ask Spotify for the next second of music.
 - Verified: 4-hour simulations for offsets −5000…+1640 ppm (incl. wrong-sign prior) settle at
@@ -279,17 +280,23 @@ in the zone path (`rate_match`, default `auto` = on; `off` restores Liquidsoap u
 
 **Field result, 0.5.0 on the same install (2026-10-09 14:37 → 10-10 09:25):** 76 backlog
 readings at −4…+5 B/s, radio buffer 108–110 KB, no STMu at all, a 15:17–17:58 session of
-2 h 41 min. **But the loop settled at +500…+800 ppm, not −3250.** Measured in Docker on a PC,
-both engines are exact at nominal (pacer +117 ppm, Liquidsoap +20 ppm over 300 s), so on that
-HA box one of them is off by ~0.38 %. Best explanation: the two clocks disagree there —
-Liquidsoap paced by the wall clock (NTP-corrected), the pacer by CLOCK_MONOTONIC, and NTP can
-only slew frequency by ±500 ppm, so a clock off by more than that is *stepped*, which corrects
-the wall clock and not the monotonic one. Supporting it: the radios' `bytes_rx` over wall time
-on 0.5.0 is 23 923 B/s, exactly the −3250 ppm first measured. Not proven — 0.5.1 logs the
-actual source B/s per wall second and a line when the two clocks disagree by >300 ppm.
-**It does not matter for function**: the loop steers by the radio's buffer, whichever clock is
-wrong. It only means `DEFAULT_PPM` is a starting guess, and the learned value per mount is
-what counts (seen: −2259 → +95 → ~+600 within the first hour).
+2 h 41 min. **But the loop settled at +500…+800 ppm, not −3250.**
+
+**Solved in 0.5.2 — it was the pacer, not the clocks.** 0.5.1 logged the source rate per
+wall-clock second and a clock-skew line: no skew line in three hours (clocks agree within
+300 ppm), and `source` steady at **23 885 B/s** while the pacer believed it sent 24 014 (+598).
+`Pacer.set_ppm` re-anchored at `emitted`, forgiving whatever had come due since the last tick
+(~25 ms on that box) — and the controller nudges the rate every 5 s, so ~0.5 % of the output
+vanished. Reproduced offline (27 ms loop, a change every 5 s: −5267 ppm vs −5390 in the
+field); fixed by re-anchoring at the old rate's target; regression test in `test_pacer.py`.
+My clock-disagreement theory (wall stepped by NTP, monotonic not) was wrong and is retracted.
+
+Consequences: the radios' real rate at 48 kHz, per wall clock, is **−4800 ppm** (direct, not
+relative to Liquidsoap) → `DEFAULT_PPM[48000] = −4800`. The −3250 from the Liquidsoap era
+means Liquidsoap on that box delivered ~23 963 B/s, not 24 000 — unexplained (in Docker on a PC
+it is exact to 20 ppm; no latency messages in its log), and moot now that it is off by default.
+Rates saved by 0.5.0/0.5.1 are ~5000 ppm high, so `rate_ppm.json` carries `"v": 2` and older
+files are ignored. Function was never affected: the loop steers by the radio's buffer.
 
 The `bytes_rx` counter itself is not trustworthy as a rate: on 0.4.9 (Liquidsoap) it climbed
 at ~30.4 KB/s once the radio's buffer was full, which no 24 kB/s source can deliver.
