@@ -37,7 +37,7 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.3.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.4.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -234,14 +234,20 @@ family of theories built around pushes, parks and recovery. 0.4.2 adds the measu
 missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
 whether the unit was still alive.
 
-**2026-10-10 18:42, Obývák rebooted itself** (0.5.2; customer: "the radio switched off twice
-today"). Buttons on the unit: CLI `play` 18:41:25 (Spotify not playing — we pushed its mount,
-i.e. silence), `stop` 18:41:54 (zone_off), `play` 18:41:58 (push), `playing:` 18:42:17 normal —
-then at 18:43:38 a new CLI connection from source port **49154** with `volume=50` (fresh boot)
-and a SlimProto reconnect superseding the old session, so no `disconnected` line and no
-liveness probe. A reboot rather than a freeze, but the same shape as every freeze above: the
-unit operated by hand, its audio-zone session churned, then it died. Nothing unusual was sent.
-Note the gap: a superseded session never runs the probe — the reconnect itself is the evidence.
+**2026-10-10 20:41 local (18:41 UTC) — NOT a freeze, and the add-on's own doing.** Customer:
+"the radio switches off while I'm listening to radio" (its own stations, not Spotify). The log
+has nothing from Obývák for hours, then CLI `play` 18:41:25 UTC with Spotify silent → **we
+pushed it into the audio zone**, swapping the station for silence; `stop` 18:41:54 (zone_off);
+`play` 18:41:58 (pushed again); then a reconnect from source port 49154 at 18:43:38 — the
+**customer pulled the PoE cable** to restart it (confirmed), not a crash. The LARA sends `play`
+over the CLI from its own buttons while on its own stations: 21 such pushes in this log, one
+radio 5.5 days after its last Spotify track. Since 0.5.4 `play`/`power_on` from a radio are
+**never acted on** (owner's decision: the radio follows Spotify, not its buttons), and a real
+`stop` while Spotify still plays holds the radio off until that Spotify session ends (`_held`)
+— before, the next tick pushed it straight back (site 5, 03:13 local the same night).
+Note also: a superseded session never runs the liveness probe — the reconnect is the evidence.
+And **all add-on log times up to 0.5.3 are UTC** (s6 scrubbed `TZ`); 0.5.4 logs local time with
+the offset (`logtime.py`).
 
 ## ✅ The lag that grows: the radios run 0.33 % slow at 48 kHz (measured 2026-10-09, fixed in 0.5.0)
 
@@ -558,8 +564,12 @@ and a late echo could kill a zone that had already restarted.
 Liquidsoap `input.external` (0.4 s) → mp3 encode → Icecast burst (**0**, `burst-on-connect 0`) →
 the LARA's own `threshold` (`buffer_seconds` × bitrate, default 1.5 s). That last one dominates —
 it was a fixed 64 KB (2.7 s at 192 kbps) and total lag ran ~4.5 s.
-- The LARA's own buttons arrive over the LMS CLI (`play`/`stop`/`power`/`button`) and are routed
-  back into the same two actions via `Controller.on_cli_command`.
+- The LARA's own buttons arrive over the LMS CLI (`play`/`stop`/`power`/`button`). Since 0.5.4
+  only `stop`/`power_off` act (`Controller.on_cli_command`: zone off + hold while that Spotify
+  session lasts); `play`/`power_on` are logged and ignored — they also arrive while the radio
+  is on its own stations, and acting on them swapped the station for a silent zone. A stop
+  from the radio stops **our stream to it**, not Spotify: librespot has no local control API
+  here, so the app keeps showing the zone as playing until someone pauses it.
 
 **What the LARA displays.** It polls `<mac> current_title ?` and `<mac> artist ?` every few
 seconds while playing, so those two answers *are* its two display lines. The librespot event

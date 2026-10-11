@@ -40,13 +40,13 @@ import discovery  # noqa: E402
 import laradev  # noqa: E402
 from lmscli import DEFAULT_CLI_PORT, LmsCliServer  # noqa: E402
 from slimproto import SlimProtoServer  # noqa: E402
+from logtime import container_env, setup_logging  # noqa: E402
 
 # Timestamps are not decoration: reconstructing a customer's frozen radio meant inferring the
 # time of every controller line from the Liquidsoap lines around it, which is how a two-hour
-# bracket became the best answer available.
-logging.basicConfig(level=logging.INFO,
-                    format="[lr3ctl] %(asctime)s %(levelname)s %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S")
+# bracket became the best answer available. And they are local time with the offset since
+# 0.5.4 — before that they were UTC without saying so (see logtime.py).
+SITE_TZ = setup_logging("lr3ctl")
 log = logging.getLogger("lr3.ctl")
 
 OPTIONS = "/data/options.json"
@@ -167,16 +167,9 @@ def supervisor_token() -> str | None:
     environment, found nothing, and the first site to try it got no sensors at all.
     """
     for name in ("SUPERVISOR_TOKEN", "HASSIO_TOKEN"):
-        if os.environ.get(name):
-            return os.environ[name]
-        for d in S6_ENV_DIRS:
-            try:
-                with open(os.path.join(d, name)) as f:
-                    tok = f.read().strip()
-            except OSError:
-                continue
-            if tok:
-                return tok
+        tok = container_env(name, S6_ENV_DIRS)
+        if tok:
+            return tok
     return None
 
 
@@ -315,6 +308,7 @@ class Controller:
         self._stat_seen: dict[str, tuple] = {}     # mac -> (stat_seq, when it last moved)
         self._blind: set[str] = set()              # macs we have already complained about
         self._spotify_was: set[str] = set()        # mounts Spotify was playing on last tick
+        self._held: dict[str, str] = {}            # mac -> mount its own buttons stopped
         self._stopping = False
         # Home Assistant sensors. The Supervisor hands every add-on a token; with
         # `homeassistant_api: true` in config.yaml it also opens the Core API to it.
@@ -994,11 +988,17 @@ class Controller:
         """The LARA pressed a button / an LMS-style command arrived on :9595."""
         log.info("CLI command from %s: %s", mac, verb)
         if verb in ("play", "power_on"):
-            active = {z.mount for z in self.zones if spotify_active(z.mount)}
-            mount = self.zone_for(mac, active) or self.zone_for(mac, {z.mount for z in self.zones})
-            if mount:
-                await self.route(mac, mount)
-        elif verb in ("stop", "power_off"):
+            # Never acted on, by decision (2026-10-11): the radio follows Spotify, not its own
+            # buttons — starting Spotify is what puts a radio into the audio zone. The LARA sends
+            # `play` from its buttons while it is on its OWN stations too, and up to 0.5.3 we
+            # answered by pushing it into the audio zone — which, with Spotify silent, swaps the
+            # station someone is listening to for silence. At site 5 that is twenty-one pushes
+            # in two weeks, one radio five days after its last Spotify track, and exactly what
+            # the customer described: "the radio switches off while I'm listening to radio".
+            log.info("CLI %s from %s — recorded; the radio follows Spotify, not its buttons",
+                     verb, mac)
+            return
+        if verb in ("stop", "power_off"):
             # Not necessarily a button press: it is also how the radio acknowledges the
             # `strm-q` we just sent it. `zone_off` filters that out by time, which also
             # covers the echo landing after the next tick already restarted the zone —
@@ -1013,6 +1013,17 @@ class Controller:
                 log.info("CLI stop from %s while its zone is off — recorded, nothing to do",
                          mac)
                 return
+            # A real press (not the echo of our own strm-q) while Spotify still plays to this
+            # radio means: leave me alone. Without a hold the next tick pushed it straight back
+            # — site 5, 03:13 one night: stop, back on, stop, back on, then stuck silent for
+            # seven hours. Switching the radio to its own station sends the same `stop`, and
+            # must not be undone either. The hold ends when that Spotify session ends.
+            mount = self.target.get(mac)
+            echo = time.monotonic() - self._stopped_at.get(mac, -1e9) < STOP_ECHO_GRACE
+            if not echo and mount and spotify_active(mount):
+                self._held[mac] = mount
+                log.info("LARA %s stopped from its own controls while Spotify still plays to /%s "
+                         "— leaving it alone until that Spotify session ends", mac, mount)
             await self.zone_off(mac)
 
     # --- actions ---------------------------------------------------------------
@@ -1296,6 +1307,12 @@ class Controller:
         now = time.monotonic()
         for key in list(self.radios.keys()):
             mount = self.settled_zone_for(key, active, now)
+            if key in self._held:
+                if mount == self._held[key]:
+                    continue            # its own buttons stopped it; respect that
+                log.info("LARA %s: the Spotify session its buttons stopped has ended — it "
+                         "follows Spotify again", key)
+                del self._held[key]
             if mount:
                 await self.route(key, mount)
                 if self.target.get(key) == mount:
@@ -1328,9 +1345,10 @@ class Controller:
             except (AttributeError, NotImplementedError, RuntimeError):
                 pass
         log.info("LR3 AudioZone v%s — mode=%s our_ip=%s idle_timeout=%ds "
-                 "buffer=%.1fs (%d KB @ %d kbps)",
+                 "buffer=%.1fs (%d KB @ %d kbps) — times in %s",
                  os.environ.get("LR3_VERSION", "?"), self.mode, self.our_ip, self.idle_timeout,
-                 self.buffer_seconds, self.buffer_kb, self.bitrate)
+                 self.buffer_seconds, self.buffer_kb, self.bitrate,
+                 f"{SITE_TZ} (librespot's own …Z stamps are UTC)" if SITE_TZ else "UTC")
         if 0 < self.idle_timeout < IDLE_TIMEOUT_FLOOR:
             log.warning("idle_timeout is %ds. Switching a zone off flushes whatever the radio "
                         "has buffered but not yet played, and it runs several seconds — "

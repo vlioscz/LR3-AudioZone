@@ -107,6 +107,13 @@ class Player:
         self._rx_at = 0.0           # when bytes_rx last advanced
         self._reported_at = 0.0     # when we last wrote a progress line
         self._stall_logged = False
+        # Network health between us and the radio, since the last progress line: the lowest the
+        # buffer got, and the longest silence between two STATs (normally 5 s, the heartbeat).
+        # A clean wired path holds both steady; a struggling link (a mesh backhaul, a flaky
+        # switch) shows up as dips and late reports long before it becomes a dropout.
+        self._in_buf_low: int | None = None
+        self._stat_at = 0.0
+        self._stat_gap = 0.0
         # Counts STAT frames. The controller uses it to tell a radio that has
         # stalled but is still answering from one that has gone silent for good.
         self.stat_seq = 0
@@ -293,6 +300,9 @@ class SlimProtoServer:
         now = time.monotonic()
         player.in_buf = in_buf
         player.in_buf_at = now
+        if player._stat_at:
+            player._stat_gap = max(player._stat_gap, now - player._stat_at)
+        player._stat_at = now
         if bytes_rx != player.bytes_rx:
             if player._stall_logged:
                 log.warning("LARA %s is fetching audio again after %.0fs of silence",
@@ -304,6 +314,7 @@ class SlimProtoServer:
             player._rx_at = now
 
         if player.mode != "play":
+            player._in_buf_low, player._stat_gap = None, 0.0
             player._stall_logged = False
             # Arrange for the first line of the next session to come early, not in five minutes.
             player._reported_at = now - PROGRESS_EVERY + FIRST_PROGRESS_AFTER
@@ -315,10 +326,15 @@ class SlimProtoServer:
             log.warning("LARA %s says it is playing but has fetched nothing for %.0fs "
                         "(in_buf=%d B) — the audio has stopped at the radio, not in Spotify",
                         player.mac, stalled, in_buf)
+        low = player._in_buf_low
+        player._in_buf_low = in_buf if low is None else min(low, in_buf)
         if now - player._reported_at >= PROGRESS_EVERY:
             player._reported_at = now
-            log.info("LARA %s playing: %.0f s in, %.1f MB fetched, in_buf=%d B",
-                     player.mac, player.elapsed, player.bytes_rx / 1_048_576.0, in_buf)
+            log.info("LARA %s playing: %.0f s in, %.1f MB fetched, in_buf=%d B "
+                     "(lowest %d B, longest gap between reports %.1f s)",
+                     player.mac, player.elapsed, player.bytes_rx / 1_048_576.0, in_buf,
+                     player._in_buf_low, player._stat_gap)
+            player._in_buf_low, player._stat_gap = None, 0.0
 
     def _apply_event(self, player: Player, event: bytes):
         mode = _MODE_BY_EVENT.get(event)

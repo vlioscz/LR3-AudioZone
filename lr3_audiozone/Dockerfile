@@ -10,12 +10,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Icecast2 = streaming server. Liquidsoap = never-dropping Spotify source.
 # ffmpeg = codecs. libasound2 = runtime dep of the librespot binary.
+# tzdata = the zone database, so TZ=Europe/Prague means something and the log is in local time.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       icecast2 \
       liquidsoap \
       ffmpeg \
       jq \
+      tzdata \
       netcat-openbsd \
       ca-certificates \
       media-types \

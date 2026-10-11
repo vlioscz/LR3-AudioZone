@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.4
+
+- **Fixed: pressing play on a radio could switch off the station it was playing.** The
+  LARA reports its own play button to the add-on even while it is on its own stations, and
+  the add-on answered by switching the radio into its audio zone — which, with Spotify not
+  playing, meant silence. To the person in the room that is the radio switching itself off.
+  It happened twenty-one times in two weeks at one site. Now only Spotify switches a radio
+  into the audio zone; the radio's play button is noted in the log and otherwise ignored.
+- **A radio stopped with its own button now stays stopped** while Spotify carries on, until
+  that Spotify session ends. Before, the add-on switched it straight back on a second later,
+  so the stop button seemed not to work. Note that the button stops the stream to that
+  radio, not Spotify itself: the app keeps showing the radio as playing until it is paused
+  there.
+- **The log is now in local time**, with the offset written out (`20:41:25+0200`). It was in
+  UTC without saying so — two hours off in summer — because Home Assistant's time zone did
+  not reach the add-on, the same way the access token did not in 0.5.0.
+- The five-minute progress line for each playing radio now also shows the lowest its buffer
+  fell and the longest gap between its reports. A healthy network holds both steady; a weak
+  link shows up there as dips and late reports long before it turns into a dropout.
+
 ## 0.5.3
 
 - **Fixed: a radio could switch off in the middle of a song while Spotify kept playing**,

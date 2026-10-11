@@ -213,7 +213,17 @@ async def run():
     events.clear(); clk.advance(C.STOP_ECHO_GRACE + 1)
     await ctl.on_cli_command(A, "stop")
     assert ("stop", A) in events and ("park",) in events, events
-    print("16) a genuine stop pressed on the radio still switches the zone off")
+    # ...and it stays off while that Spotify session goes on (0.5.4: it used to be pushed
+    # straight back on the next tick — stop, back on, stop, back on, at site 5 at 03:13).
+    events.clear()
+    for _ in range(5):
+        clk.advance(1); await ctl.tick()
+    assert not [e for e in events if e[0] == "push"], events
+    # When Spotify stops and starts again, the radio follows it once more.
+    active_mounts = set(); clk.advance(1); await ctl.tick()
+    assert A not in ctl._held
+    active_mounts = {mine}
+    print("16) a genuine stop pressed on the radio switches the zone off, and it stays off")
 
     # An underrun stops playback but keeps the control connection: `target` still says
     # "playing", so nothing used to re-push and the radio stayed silent for minutes.
@@ -735,6 +745,47 @@ async def run():
     assert lines == [f"Spotify on /{m} is playing (playing)", f"Spotify on /{m} went quiet (paused)",
                      f"Spotify on /{m} is playing (loading)"], lines
     print("44) each change of Spotify's state on a zone is logged once, with the event")
+
+    # The site 5 complaint: "the radio switches off while I'm listening to radio". The LARA
+    # sends `play` from its own buttons on its own stations too, and we used to answer by
+    # pulling it into a silent audio zone. Only Spotify actually playing to it may do that.
+    C.time = clk
+    ctl = mk({"idle_timeout": 60}, radios=[(A, "Koupelna"), (B, "Obývák")])
+    mine = ctl.mount_for(A)
+    active_mounts = set(); events.clear()
+    await ctl.on_cli_command(A, "play")
+    await ctl.on_cli_command(A, "power_on")
+    assert events == [], f"no Spotify playing -> the radio stays on its station: {events}"
+    active_mounts = {"all"}
+    await ctl.on_cli_command(A, "play")
+    assert events == [], "nor with Spotify playing: only Spotify starts the zone (by decision)"
+    print("45) play on a radio's own buttons never switches it into the audio zone")
+
+    # Its own stop button (or switching to its own station) while Spotify plays on: off, and
+    # it stays off until that Spotify session ends — then it follows Spotify again.
+    active_mounts = {mine}; events.clear()
+    clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+    clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+    assert ctl.target.get(A) == mine, ctl.target
+    clk.advance(C.STOP_ECHO_GRACE + 1)
+    await ctl.on_cli_command(A, "stop")
+    assert ctl._held.get(A) == mine and ctl.target.get(A) is None
+    events.clear()
+    for _ in range(10):
+        clk.advance(1); await ctl.tick()
+    assert not [e for e in events if e[0] == "push" and e[1] == A], events
+    active_mounts = set(); clk.advance(1); await ctl.tick()       # Spotify paused/stopped
+    assert A not in ctl._held
+    active_mounts = {mine}; events.clear()
+    clk.advance(1); await ctl.tick()
+    assert ("push", A, mine) in events, "a new Spotify session takes the radio again"
+    # The echo of our OWN strm-q is not a press and must not hold anything.
+    clk.advance(C.ZONE_SETTLE + 1)
+    await ctl.zone_off(A)
+    await ctl.on_cli_command(A, "stop")
+    assert A not in ctl._held
+    C.time = real_time
+    print("46) a stop from the radio itself is respected until that Spotify session ends")
 
 
 asyncio.run(run())

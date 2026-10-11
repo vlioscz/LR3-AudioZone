@@ -54,9 +54,10 @@ FFMPEG_RESTART = 2.0
 # grow without bound.
 FFMPEG_STUCK = 2.0
 
-logging.basicConfig(level=logging.INFO,
-                    format="[lr3ctl] %(asctime)s %(levelname)s %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from logtime import setup_logging  # noqa: E402
+
+setup_logging("lr3ctl")   # same format and time zone as the controller's lines
 log = logging.getLogger("lr3.pacer")
 
 
