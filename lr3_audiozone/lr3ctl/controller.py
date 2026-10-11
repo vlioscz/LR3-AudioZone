@@ -987,9 +987,13 @@ class Controller:
     async def on_cli_command(self, mac: str, verb: str):
         """The LARA pressed a button / an LMS-style command arrived on :9595."""
         log.info("CLI command from %s: %s", mac, verb)
-        if verb in ("play", "power_on"):
+        if verb in ("play", "power_on", "pause"):
             # Never acted on, by decision (2026-10-11): the radio follows Spotify, not its own
-            # buttons — starting Spotify is what puts a radio into the audio zone. The LARA sends
+            # buttons — starting Spotify is what puts a radio into the audio zone.
+            # `pause` likewise: it used to send strm-p, which pauses that one radio on a LIVE
+            # stream — it then plays on behind by however long it was paused, and a pause past
+            # Icecast's queue (~20 s) ends with the radio dropped. No radio has ever sent it in
+            # the logs we have, so ignoring it costs nothing and removes the trap. The LARA sends
             # `play` from its buttons while it is on its OWN stations too, and up to 0.5.3 we
             # answered by pushing it into the audio zone — which, with Spotify silent, swaps the
             # station someone is listening to for silence. At site 5 that is twenty-one pushes

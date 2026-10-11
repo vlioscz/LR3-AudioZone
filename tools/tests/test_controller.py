@@ -759,6 +759,9 @@ async def run():
     active_mounts = {"all"}
     await ctl.on_cli_command(A, "play")
     assert events == [], "nor with Spotify playing: only Spotify starts the zone (by decision)"
+    await ctl.on_cli_command(A, "pause")
+    assert events == [], "pause is ignored too (0.5.5): pausing one radio on a live stream only " \
+                         "makes it fall behind, and past ~20 s Icecast drops it"
     print("45) play on a radio's own buttons never switches it into the audio zone")
 
     # Its own stop button (or switching to its own station) while Spotify plays on: off, and

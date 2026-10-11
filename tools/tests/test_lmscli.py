@@ -172,7 +172,9 @@ async def run():
     for line in (f"{MAC} play", f"{MAC} stop", f"{MAC} power 0", f"{MAC} button pause"):
         await ask(line)
     assert (MAC, "play") in invoked and (MAC, "stop") in invoked and (MAC, "power_off") in invoked
-    assert ("pause", MAC, True) in fake.calls
+    # pause goes to the controller like the rest (which ignores it, 0.5.5) — never straight
+    # out as strm-p, which paused one radio on a live stream and let it fall behind
+    assert (MAC, "pause") in invoked and ("pause", MAC, True) not in fake.calls
 
     # ...and ignored inside it: the LARA sends `stop` right after login as state sync
     invoked.clear()

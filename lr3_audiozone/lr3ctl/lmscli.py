@@ -398,7 +398,10 @@ class LmsCliServer:
             elif action in ("stop", "power", "power_off", "powerof"):
                 await self._invoke(p.mac, "stop")
             elif action.startswith("pause"):
-                await self.slim.pause(p.mac, p.mode == "play")
+                # Handed to the controller like play/stop rather than answered here with
+                # strm-p: pausing one radio on a live stream only makes it fall behind, and a
+                # pause past Icecast's queue (~20 s) ends in a dropout. The controller decides.
+                await self._invoke(p.mac, "pause")
             else:
                 log.info("CLI button %r from %s (unmapped)", action, p.mac)
             return tokens

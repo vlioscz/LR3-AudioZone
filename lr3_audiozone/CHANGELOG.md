@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5
+
+- **The pause button on a radio is now ignored too**, like play. It used to pause just that
+  radio — but the stream is live, so on resuming the radio played on behind everyone else by
+  however long it had been paused, and a pause of more than about twenty seconds ended with the
+  streaming server dropping the radio. The radio follows Spotify: pause it in the app. (No
+  radio has ever sent pause in the logs we have, so in practice nothing changes.)
+
 ## 0.5.4
 
 - **Fixed: pressing play on a radio could switch off the station it was playing.** The

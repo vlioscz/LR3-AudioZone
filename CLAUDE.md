@@ -37,7 +37,7 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.4.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.5.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -567,7 +567,11 @@ it was a fixed 64 KB (2.7 s at 192 kbps) and total lag ran ~4.5 s.
 - The LARA's own buttons arrive over the LMS CLI (`play`/`stop`/`power`/`button`). Since 0.5.4
   only `stop`/`power_off` act (`Controller.on_cli_command`: zone off + hold while that Spotify
   session lasts); `play`/`power_on` are logged and ignored — they also arrive while the radio
-  is on its own stations, and acting on them swapped the station for a silent zone. A stop
+  is on its own stations, and acting on them swapped the station for a silent zone. `pause` is
+  ignored too since 0.5.5 (it sent `strm-p`: one radio paused on a live stream falls behind,
+  and past ~20 s Icecast drops it). No radio has ever sent pause or reported `STMp` in our logs
+  (site 5 + third-party install, 2 weeks); if `STMp -> mode=pause` ever appears, the LARA paused
+  itself and that is the evidence to design a reaction from. jump_fwd/jump_rew: unmapped. A stop
   from the radio stops **our stream to it**, not Spotify: librespot has no local control API
   here, so the app keeps showing the zone as playing until someone pauses it.
 
