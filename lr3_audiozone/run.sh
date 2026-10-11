@@ -76,31 +76,27 @@ fi
 mkdir -p /etc/lr3
 cat > /etc/lr3/spotify_event.sh <<'EOF'
 #!/usr/bin/env sh
-# POZOR: události hlasitosti se NESMÍ zapsat do stavového souboru. Controller bere všechno
-# mimo seznam přehrávacích událostí jako "Spotify nehraje" — a posunutí posuvníku uprostřed
-# skladby by tak LARU po idle_timeout vyplo.  Hlasitost jde do vlastního souboru.
-# Název události se mezi verzemi librespotu liší (volume_set / volume_changed), proto vzor.
+# Do stavového souboru smí JEN události, které říkají, jestli Spotify hraje. Controller bere
+# všechno mimo přehrávací události jako "Spotify nehraje", takže cokoli jiného uprostřed skladby
+# — posun posuvníku hlasitosti, přetočení, zamíchání, opakování, korekce pozice, přepnutí
+# telefonu — zónu po idle_timeout vypnulo, i když hudba hrála dál. Do 0.5.2 byl seznam obrácený
+# (zakázaná byla jen hlasitost) a u kolegy to v půlce delších skladeb vypínalo rádia: zóna OFF
+# a za pár vteřin, s další skladbou, zase ON. Neznámá událost tedy stav NEMĚNÍ.
 M="${LR3_MOUNT:-unknown}"
 case "${PLAYER_EVENT:-}" in
-  *volume*)
-    # Hlasitost si aplikuje librespot sám (softwarově), takže tu není co dělat — ale událost
-    # se NESMÍ dostat do stavového souboru: controller bere všechno mimo přehrávací události
-    # jako "Spotify nehraje" a posunutí posuvníku uprostřed skladby by LARU po idle_timeout vyplo.
-    :
-    ;;
-  *)
-    printf '%s' "${PLAYER_EVENT:-}" > "/tmp/spotify_state_${M}"
-    # Metadata skladby pro displej LARY (ptá se na ně po LMS CLI: artist ? / current_title ?).
-    # Názvy proměnných se mezi verzemi librespotu liší, proto několik variant.
-    TITLE="${NAME:-${TRACK_NAME:-${ITEM_NAME:-}}}"
-    ART="${ARTISTS:-${ARTIST:-${ALBUM_ARTISTS:-}}}"
-    if [ -n "${TITLE}" ]; then
-      # ARTISTS bývá víc řádků (jeden interpret na řádek) → slož do jednoho.
-      ART=$(printf '%s' "${ART}" | tr '\n' ',' | sed -e 's/,$//' -e 's/,/, /g')
-      printf '%s\n%s\n' "${TITLE}" "${ART}" > "/tmp/spotify_track_${M}"
-    fi
+  playing|paused|stopped|loading|preloading|started|changed|track_changed|end_of_track|unavailable|session_disconnected)
+    printf '%s' "${PLAYER_EVENT}" > "/tmp/spotify_state_${M}"
     ;;
 esac
+# Metadata skladby pro displej LARY (ptá se na ně po LMS CLI: artist ? / current_title ?).
+# Názvy proměnných se mezi verzemi librespotu liší, proto několik variant.
+TITLE="${NAME:-${TRACK_NAME:-${ITEM_NAME:-}}}"
+ART="${ARTISTS:-${ARTIST:-${ALBUM_ARTISTS:-}}}"
+if [ -n "${TITLE}" ]; then
+  # ARTISTS bývá víc řádků (jeden interpret na řádek) → slož do jednoho.
+  ART=$(printf '%s' "${ART}" | tr '\n' ',' | sed -e 's/,$//' -e 's/,/, /g')
+  printf '%s\n%s\n' "${TITLE}" "${ART}" > "/tmp/spotify_track_${M}"
+fi
 EOF
 chmod +x /etc/lr3/spotify_event.sh
 

@@ -191,12 +191,17 @@ def host_ip() -> str:
         s.close()
 
 
-def spotify_active(mount: str) -> bool:
+def spotify_event(mount: str) -> str:
+    """The last playback event librespot reported for this zone ("" if none yet)."""
     try:
         with open(os.path.join(STATE_DIR, f"spotify_state_{mount}")) as f:
-            return f.read().strip() in ACTIVE_EVENTS
+            return f.read().strip()
     except OSError:
-        return False
+        return ""
+
+
+def spotify_active(mount: str) -> bool:
+    return spotify_event(mount) in ACTIVE_EVENTS
 
 
 def spotify_track(mount: str) -> tuple[str, str]:
@@ -309,6 +314,7 @@ class Controller:
         self._backlog_warned = False
         self._stat_seen: dict[str, tuple] = {}     # mac -> (stat_seq, when it last moved)
         self._blind: set[str] = set()              # macs we have already complained about
+        self._spotify_was: set[str] = set()        # mounts Spotify was playing on last tick
         self._stopping = False
         # Home Assistant sensors. The Supervisor hands every add-on a token; with
         # `homeassistant_api: true` in config.yaml it also opens the Core API to it.
@@ -1278,6 +1284,15 @@ class Controller:
 
     async def tick(self):
         active = {z.mount for z in self.zones if spotify_active(z.mount)}
+        # Say which event started or stopped Spotify on a zone. Every "the radio switched itself
+        # off" so far has needed this and not had it: a zone going quiet looked the same whether
+        # someone pressed pause, the queue ran out, or librespot reported something that was
+        # never about playing at all (the 0.5.3 hook fix). One line per change, not per tick.
+        for mount in sorted(active ^ self._spotify_was):
+            log.info("Spotify on /%s %s (%s)", mount,
+                     "is playing" if mount in active else "went quiet",
+                     spotify_event(mount) or "no event yet")
+        self._spotify_was = active
         now = time.monotonic()
         for key in list(self.radios.keys()):
             mount = self.settled_zone_for(key, active, now)

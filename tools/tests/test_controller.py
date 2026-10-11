@@ -718,6 +718,24 @@ async def run():
     C.time = real_time
     print("43) the backlog is only compared within one unbroken listening session")
 
+    # "The radio switched itself off" has needed this line every time: which event made the
+    # zone go quiet. Logged on the change, with the event, once — not every tick.
+    ctl = mk(radios=[(A, "Koupelna")])
+    m = ctl.mount_for(A)
+    state = os.path.join(C.STATE_DIR, f"spotify_state_{m}")
+    saved_active = C.spotify_active
+    C.spotify_active = lambda mount: C.spotify_event(mount) in C.ACTIVE_EVENTS
+    said.clear(); C.log.addHandler(h)
+    for ev in ("playing", "playing", "paused", "paused", "loading"):
+        open(state, "w").write(ev)
+        await ctl.tick()
+    C.log.removeHandler(h)
+    C.spotify_active = saved_active
+    lines = [s for s in said if s.startswith("Spotify on")]
+    assert lines == [f"Spotify on /{m} is playing (playing)", f"Spotify on /{m} went quiet (paused)",
+                     f"Spotify on /{m} is playing (loading)"], lines
+    print("44) each change of Spotify's state on a zone is logged once, with the event")
+
 
 asyncio.run(run())
 print("\nALL OK")

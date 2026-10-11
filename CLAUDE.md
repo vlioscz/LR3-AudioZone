@@ -37,7 +37,7 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.2.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.3.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -520,8 +520,19 @@ tell which. This took three attempts; the history is here so it is not re-litiga
   firmware that appears to be a no-op; it is kept because it is the only hardware-level hook we
   have and it costs one packet.
 
-⚠️ The event hook must NOT write volume events into `spotify_state_*`: everything outside
-`ACTIVE_EVENTS` reads as "not playing", so a volume nudge mid-song would switch the zone off.
+⚠️ **The event hook writes only playback events into `spotify_state_*` (allowlist, 0.5.3)**:
+`playing|paused|stopped|loading|preloading|started|changed|track_changed|end_of_track|
+unavailable|session_disconnected`. Everything outside `ACTIVE_EVENTS` reads as "not playing",
+and until 0.5.2 the hook was a *denylist* (only `*volume*` was kept out) — so seeked,
+shuffle/repeat/auto_play changes, session_client_changed and, most likely, librespot's
+`position_correction` marked a playing zone idle; `idle_timeout` later the zone went OFF
+mid-song and came back ON with the next track. Signature in the log: `zone OFF`, then within
+seconds `Loading <next track>` + `zone ON`, with the previous track having run to its natural
+end (third-party install 2026-10-10: OFF 10:39:44 / 11:06:04, idle onset ~250 s into tracks of
+484 s and 377 s; also 10-03 and 10-08 on 0.4.x, so not caused by the pacer — though the pacer's
+slower position may make `position_correction` more frequent). Unknown events now change
+nothing. Since 0.5.3 `tick()` also logs every active↔idle change with the event that caused it
+(`Spotify on /<mount> went quiet (paused)`), which is what this hunt lacked.
 
 ⚠️ **The idle countdown must be cleared on every playing tick** (`tick()`), not only when a
 radio is pushed to a new mount — `route()` returns early once the radio is already on that

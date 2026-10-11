@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.3
+
+- **Fixed: a radio could switch off in the middle of a song while Spotify kept playing**,
+  and come back on with the next track. Seen twice in one morning at a three-radio install,
+  both times in a track longer than six minutes, and it predates 0.5 — it happened on 0.4.x
+  too, so it is not something the recent updates introduced. Spotify reports far more than
+  "playing" and "paused": seeking, shuffle and repeat, corrections of the playback position,
+  another phone taking over. The add-on treated every one it did not recognise as "stopped",
+  and two minutes later switched the zone off. Only playback events count now.
+- The log now says, once, whenever Spotify starts or stops on a zone and which event did it
+  — so "the radio switched itself off" can be told apart from a pause, the end of the queue,
+  or anything else.
+
 ## 0.5.2
 
 - **The pacing now sends exactly what it means to.** Every time the add-on nudged a zone's
