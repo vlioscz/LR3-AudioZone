@@ -234,6 +234,15 @@ family of theories built around pushes, parks and recovery. 0.4.2 adds the measu
 missing: a liveness probe on :80 and :61695 after every session drop, so the log itself says
 whether the unit was still alive.
 
+**2026-10-10 18:42, Obývák rebooted itself** (0.5.2; customer: "the radio switched off twice
+today"). Buttons on the unit: CLI `play` 18:41:25 (Spotify not playing — we pushed its mount,
+i.e. silence), `stop` 18:41:54 (zone_off), `play` 18:41:58 (push), `playing:` 18:42:17 normal —
+then at 18:43:38 a new CLI connection from source port **49154** with `volume=50` (fresh boot)
+and a SlimProto reconnect superseding the old session, so no `disconnected` line and no
+liveness probe. A reboot rather than a freeze, but the same shape as every freeze above: the
+unit operated by hand, its audio-zone session churned, then it died. Nothing unusual was sent.
+Note the gap: a superseded session never runs the probe — the reconnect itself is the evidence.
+
 ## ✅ The lag that grows: the radios run 0.33 % slow at 48 kHz (measured 2026-10-09, fixed in 0.5.0)
 
 0.4.7's backlog lines answered it, on the third-party install (zone HOUSE, two radios, 06:45 on):
