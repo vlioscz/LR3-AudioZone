@@ -219,7 +219,8 @@ async def run():
     for _ in range(5):
         clk.advance(1); await ctl.tick()
     assert not [e for e in events if e[0] == "push"], events
-    # When Spotify stops and starts again, the radio follows it once more.
+    # When Spotify is paused and started again, the radio follows it once more.
+    open(os.path.join(C.STATE_DIR, f"spotify_state_{mine}"), "w").write("paused")
     active_mounts = set(); clk.advance(1); await ctl.tick()
     assert A not in ctl._held
     active_mounts = {mine}
@@ -777,8 +778,31 @@ async def run():
     for _ in range(10):
         clk.advance(1); await ctl.tick()
     assert not [e for e in events if e[0] == "push" and e[1] == A], events
-    active_mounts = set(); clk.advance(1); await ctl.tick()       # Spotify paused/stopped
+    # Site 5, 0.5.4: a track ending reads as a second of quiet, and that released the hold —
+    # the radio its owner had silenced switched itself back on at 15:42, 17:39 and 00:14.
+    state = os.path.join(C.STATE_DIR, f"spotify_state_{mine}")
+    for gap in (1, 8):                          # a normal track change; a track failing to load
+        open(state, "w").write("end_of_track")
+        active_mounts = set()
+        for _ in range(gap):
+            clk.advance(1); await ctl.tick()
+        open(state, "w").write("loading")
+        active_mounts = {mine}; clk.advance(1); await ctl.tick()
+        assert ctl._held.get(A) == mine, f"a {gap}s gap between tracks must not end the hold"
+    assert not [e for e in events if e[0] == "push" and e[1] == A], events
+    # A power cut at the breaker (the customer's next move) must not bring it back either.
+    ctl.on_slim_disconnect(type("P", (), {"mac": A, "ip": ""})())
+    clk.advance(5); await ctl.tick()
+    assert ctl._held.get(A) == mine and not [e for e in events if e[0] == "push"]
+    # Pausing Spotify itself ends the hold; so does a queue that ran out (quiet long enough).
+    open(state, "w").write("paused")
+    active_mounts = set(); clk.advance(1); await ctl.tick()       # Spotify paused
     assert A not in ctl._held
+    ctl._held[A] = mine
+    open(state, "w").write("end_of_track")
+    for _ in range(int(max(C.HOLD_RELEASE_QUIET, ctl.idle_timeout)) + 2):
+        clk.advance(1); await ctl.tick()
+    assert A not in ctl._held, "a playlist that simply ended must release it eventually"
     active_mounts = {mine}; events.clear()
     clk.advance(1); await ctl.tick()
     assert ("push", A, mine) in events, "a new Spotify session takes the radio again"

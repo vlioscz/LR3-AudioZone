@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.6
+
+- **Fixed: a radio switched off with its own stop button could switch itself back on**,
+  minutes or hours later — at one site three times in a day, the last at a quarter past
+  midnight. The button stops the radio, but Spotify on the phone carries on playing to it;
+  0.5.4 kept the radio off until that Spotify session ended, and mistook the second of
+  silence between two songs for the end. Now only pausing or stopping Spotify itself (or a
+  minute or more of real silence, such as a playlist running out) lets the radio follow
+  Spotify again. A radio switched off at the breaker stays off the same way when it comes back.
+- What to tell people: **the radio's stop button silences the radio, not Spotify.** To end it
+  properly, pause Spotify on the phone.
+
 ## 0.5.5
 
 - **The pause button on a radio is now ignored too**, like play. It used to pause just that

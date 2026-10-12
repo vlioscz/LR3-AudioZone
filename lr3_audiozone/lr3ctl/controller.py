@@ -56,6 +56,14 @@ LIQ_TEMPLATE = "/etc/lr3/radio.liq.tpl"
 GROUP_MOUNT = "all"        # the "every radio" zone
 FALLBACK_MOUNT = "default"  # used only when no radio could be found at start-up
 ACTIVE_EVENTS = {"playing", "started", "track_changed", "changed", "loading", "preloading"}
+# What ends a hold (a radio stopped from its own buttons while Spotify kept playing): somebody
+# pausing or stopping Spotify itself. NOT a track ending — Spotify reports `end_of_track`
+# between two songs, quiet for a second (eight, when a track fails to load), and 0.5.4 took
+# that for the end of the session: at site 5 the held radios switched themselves back on at
+# 15:42, 17:39 and, waking the house, at 00:14. Any other quiet only ends a hold once it has
+# lasted longer than this — a session left idle that long is over.
+HOLD_RELEASE_EVENTS = {"paused", "stopped", "session_disconnected"}
+HOLD_RELEASE_QUIET = 60.0
 LIBRESPOT_LOG_BURST = 40      # most lines copied out of one librespot log in a single pass
 LIBRESPOT_LOG_CHUNK = 256_000  # most bytes read from one log per pass, so a huge file cannot
                                # stall the tick loop (and with it the SlimProto heartbeat)
@@ -309,6 +317,7 @@ class Controller:
         self._blind: set[str] = set()              # macs we have already complained about
         self._spotify_was: set[str] = set()        # mounts Spotify was playing on last tick
         self._held: dict[str, str] = {}            # mac -> mount its own buttons stopped
+        self._held_quiet: dict[str, float] = {}    # mac -> since when its held zone is quiet
         self._stopping = False
         # Home Assistant sensors. The Supervisor hands every add-on a token; with
         # `homeassistant_api: true` in config.yaml it also opens the Core API to it.
@@ -1312,11 +1321,23 @@ class Controller:
         for key in list(self.radios.keys()):
             mount = self.settled_zone_for(key, active, now)
             if key in self._held:
-                if mount == self._held[key]:
+                held = self._held[key]
+                if mount == held:
+                    self._held_quiet.pop(key, None)
                     continue            # its own buttons stopped it; respect that
-                log.info("LARA %s: the Spotify session its buttons stopped has ended — it "
-                         "follows Spotify again", key)
+                if mount is None:
+                    ev = spotify_event(held)
+                    quiet = now - self._held_quiet.setdefault(key, now)
+                    if ev not in HOLD_RELEASE_EVENTS and quiet < max(HOLD_RELEASE_QUIET,
+                                                                     self.idle_timeout):
+                        continue        # a gap between two tracks: still the same session
+                    why = f"Spotify {ev}" if ev in HOLD_RELEASE_EVENTS else f"quiet {quiet:.0f}s"
+                else:
+                    why = f"/{mount} started playing to it"
+                log.info("LARA %s: the Spotify session its buttons stopped has ended (%s) — "
+                         "it follows Spotify again", key, why)
                 del self._held[key]
+                self._held_quiet.pop(key, None)
             if mount:
                 await self.route(key, mount)
                 if self.target.get(key) == mount:

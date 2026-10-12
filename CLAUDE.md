@@ -37,7 +37,7 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.5.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.6.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -248,6 +248,18 @@ radio 5.5 days after its last Spotify track. Since 0.5.4 `play`/`power_on` from 
 Note also: a superseded session never runs the liveness probe — the reconnect is the evidence.
 And **all add-on log times up to 0.5.3 are UTC** (s6 scrubbed `TZ`); 0.5.4 logs local time with
 the offset (`logtime.py`).
+
+**2026-10-11/12, site 5: "the radios start playing by themselves" — 0.5.4's hold, my bug.**
+Someone pressed stop on the radio while Spotify kept playing on their phone (account
+`31oguaz…`), so the radio was held off (0.5.4) — and the hold was released by the first tick
+on which the zone looked idle, which a track boundary provides (`end_of_track`, ~1 s; 8 s when
+a track fails to load). Obývák: held 14:21, back ON 15:42:58 (family out); held 16:18, back ON
+17:39:37, paused from the app 26 s later. KP2: held 22:46, back ON **00:14:00**; the customer
+pressed buttons (ignored), then cut the breaker ~00:24 — the 00:26 "answers nothing … wedged"
+lines for all three radios are that breaker, NOT freezes. 0.5.6: a hold ends only on
+`paused`/`stopped`/`session_disconnected`, on ≥ max(60 s, idle_timeout) of quiet, or when
+another zone takes the radio; it survives the radio reconnecting (a breaker-cycled radio
+must not wake up playing).
 
 ## ✅ The lag that grows: the radios run 0.33 % slow at 48 kHz (measured 2026-10-09, fixed in 0.5.0)
 
