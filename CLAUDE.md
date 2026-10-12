@@ -37,7 +37,7 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.7.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.8** (adds `sensor.lr3_audiozone` + a restart card). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -506,6 +506,24 @@ loop that carries the heartbeat), re-posted every 5 min because HA forgets API-s
 restart, set to `unavailable` on shutdown, failures logged once. Read-only by design: asked
 for so a relay can switch speakers by the device picked in Spotify (`docs/rele-podle-zony.md`).
 API-set entities have no unique_id — not renameable in the UI; that is accepted.
+
+**`sensor.lr3_audiozone` (0.5.8)** — the add-on's own sensor, asked for so a customer sees
+the thing is being worked on: state = version; attributes `release` (count of `## ` in the
+CHANGELOG baked into the image at /etc/lr3), `versions_here`/`counted_since`/`updated`/
+`history` from `/data/versions.json` (one entry per *change* of version; nothing recorded
+before 0.5.8 and the Supervisor keeps no install/update dates, so every site starts at 1),
+`running_since`, `radios`, `addon` (the slug). Card + restart guide: `docs/karta-na-dashboard.md`.
+Facts checked against Supervisor/Core source on 2026-10-12, so they are not re-researched:
+- `/addons/self/*` (info, restart, stop…) is open to any add-on with its token — the
+  Supervisor's `api_bypass` is matched before `hassio_api` is consulted. The slug comes from
+  `/addons/self/info`; fallback: hostname with `-`→`_` (set even under host_network).
+- slug = `sha1(repo URL as typed, lowercased)[:8]` + `_lr3_audiozone`; the README badge URL
+  gives **`162678ec_lr3_audiozone`**, a trailing `/` or `.git` gives another.
+- `hassio.addon_restart`/`addon_stop` (and `app_*` from HA 2026.2) are **admin-only since
+  HA 2026.5**; a script keeps the caller's user, an automation runs without one → for a
+  non-admin: input_button + automation. The Supervisor integration also has a hidden
+  `switch.lr3_audiozone` (start/stop, HA 2025.10+) — not recommended to customers: a stopped
+  add-on makes the radios retry ~40×/h (see `control_mode: off`).
 
 **Not** an integration, by decision (2026-10-09): someone else has already made a LARA
 integration, and anyone playing from Spotify does not need one. Control of the radio from HA

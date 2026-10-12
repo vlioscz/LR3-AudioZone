@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime
 import glob
 import json
 import logging
@@ -137,6 +138,12 @@ RATE_SAVE_EVERY = 600.0
 HA_API = "http://supervisor/core/api"
 HA_REFRESH = 300.0        # re-post everything this often: HA forgets API-set states on restart
 HA_RETRY = 60.0
+# --- ...and one for the add-on itself: which version runs, and how many have run here --------
+STATUS_SENSOR = "sensor.lr3_audiozone"
+SUPERVISOR_API = "http://supervisor"
+VERSIONS_FILE = f"{DATA_DIR}/versions.json"   # this installation's own update history
+CHANGELOG = "/etc/lr3/CHANGELOG.md"           # every release is in it, so it counts them
+HISTORY_SHOWN = 10                            # versions listed on the sensor, newest first
 
 
 def opt(cfg, key, default):
@@ -180,6 +187,36 @@ def supervisor_token() -> str | None:
         if tok:
             return tok
     return None
+
+
+def release_number(path: str | None = None) -> int | None:
+    """Which release of the add-on this is: every version ever shipped has a `## ` section."""
+    try:
+        with open(path or CHANGELOG, encoding="utf-8") as f:
+            n = sum(1 for line in f if line.startswith("## "))
+    except OSError:
+        return None
+    return n or None
+
+
+def load_versions(path: str) -> list[dict]:
+    """The versions that have run on this installation, oldest first ([] if none recorded)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return []
+    hist = saved.get("history") if isinstance(saved, dict) else None
+    if not isinstance(hist, list):
+        return []
+    # Only well-formed entries: a bad one would break status_state(), and with it every sensor.
+    return [h for h in hist if isinstance(h, dict) and isinstance(h.get("version"), str)
+            and isinstance(h.get("since"), str) and h["version"] and h["since"]]
+
+
+def local_now() -> str:
+    """ISO 8601 with a colon in the offset — the form a browser's Date() is sure to parse."""
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def host_ip() -> str:
@@ -328,6 +365,13 @@ class Controller:
         self._ha_retry_at = 0.0
         self._ha_failing = False
         self._ha_task: asyncio.Task | None = None
+        # The add-on's own sensor: the version, which release that is, and this installation's
+        # history of them — asked for so the customer can see the thing is being worked on.
+        self.version = os.environ.get("LR3_VERSION") or "?"
+        self.release = release_number()
+        self.versions: list[dict] = []             # filled by record_version() at start-up
+        self.started_at = local_now()
+        self.addon_slug: str | None = None          # for hassio.addon_restart; from the Supervisor
         self.cred_cache_flag_ok = self.probe_cred_cache_flag()
 
     # --- inventory -------------------------------------------------------------
@@ -1301,6 +1345,86 @@ class Controller:
                  "mount": mount or "", "spotify": "playing" if mount in active else "idle"})
         return out
 
+    def record_version(self) -> list[dict]:
+        """Add this version to the installation's history if it is new here, and return it.
+
+        One entry per change of version, so restarts do not count. Nothing kept such a record
+        before 0.5.8, which is therefore where every installation's count starts.
+        """
+        hist = load_versions(VERSIONS_FILE)
+        if self.version != "?" and (not hist or hist[-1]["version"] != self.version):
+            hist.append({"version": self.version, "since": local_now()})
+            tmp = VERSIONS_FILE + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"v": 1, "history": hist}, f, indent=1)
+                os.replace(tmp, VERSIONS_FILE)
+            except OSError as e:
+                log.warning("cannot record the version history in %s: %s", VERSIONS_FILE, e)
+            if len(hist) == 1:
+                log.info("v%s is the first version recorded on this installation (the count "
+                         "starts here — earlier updates were never written down)", self.version)
+            else:
+                log.info("v%s is version %d on this installation (counted since v%s)",
+                         self.version, len(hist), hist[0]["version"])
+        self.versions = hist
+        return hist
+
+    def status_state(self) -> tuple[str, dict]:
+        """`sensor.lr3_audiozone`: the version running, with what a dashboard card shows."""
+        attrs = {"friendly_name": "LR3 AudioZone", "icon": "mdi:speaker-wireless",
+                 "version": self.version}
+        if self.release:
+            attrs["release"] = self.release
+        if self.versions:
+            attrs["versions_here"] = len(self.versions)
+            attrs["counted_since"] = self.versions[0]["version"]
+            attrs["updated"] = self.versions[-1]["since"][:10]    # a date: HA shows it as one
+            attrs["history"] = [f"{h['version']} ({h['since'][:10]})"
+                                for h in reversed(self.versions[-HISTORY_SHOWN:])]
+        attrs["running_since"] = self.started_at
+        attrs["radios"] = len(self.radios)
+        if self.addon_slug:
+            attrs["addon"] = self.addon_slug
+        return self.version, attrs
+
+    def fetch_addon_slug(self) -> str | None:
+        """Blocking. The Supervisor's id for this add-on — what hassio.addon_restart takes.
+
+        It is a hash of the repository URL + "_lr3_audiozone", so it changes with how the URL
+        was typed (a trailing slash is a different hash). /addons/self/* is open to every
+        add-on with its token, no `hassio_api` needed (the Supervisor's api_bypass).
+        """
+        req = urllib.request.Request(f"{SUPERVISOR_API}/addons/self/info",
+                                     headers={"Authorization": f"Bearer {self.ha_token}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8")).get("data") or {}
+        slug = data.get("slug")
+        return slug if isinstance(slug, str) and slug else None
+
+    @staticmethod
+    def slug_from_hostname() -> str | None:
+        """The Supervisor names the container after the slug, "_" turned into "-" — also with
+        host networking, as long as there is no host_uts. Our own slug has no dash, so the
+        mapping back is exact."""
+        slug = socket.gethostname().replace("-", "_")
+        return slug if slug.endswith("_lr3_audiozone") else None
+
+    async def learn_addon_slug(self):
+        if not self.ha_token:
+            return
+        try:
+            self.addon_slug = await asyncio.to_thread(self.fetch_addon_slug)
+        except Exception as e:
+            self.addon_slug = self.slug_from_hostname()
+            if not self.addon_slug:
+                log.info("could not ask the Supervisor for this add-on's id (%s) — a restart "
+                         "button needs it; it is in the address of the add-on's page in HA", e)
+                return
+        if self.addon_slug:
+            log.info("restart button for a dashboard: action hassio.addon_restart, addon: %s "
+                     "(see docs/karta-na-dashboard.md)", self.addon_slug)
+
     def post_state(self, entity: str, state: str, attrs: dict):
         """Blocking — run it in a thread. The heartbeat to every radio lives on this loop."""
         req = urllib.request.Request(
@@ -1318,6 +1442,7 @@ class Controller:
         if self._ha_failing and now < self._ha_retry_at:
             return
         want = self.sensor_states()
+        want[STATUS_SENSOR] = self.status_state()
         refresh = now >= self._ha_refresh_at
         todo = {e: v for e, v in want.items() if refresh or self._ha_sent.get(e) != v}
         if todo:
@@ -1343,7 +1468,8 @@ class Controller:
             log.info("the Home Assistant sensors are being updated again")
         if first:
             log.info("Home Assistant sensors: %s",
-                     ", ".join(f"{e} ({a['radio']})" for e, (_, a) in sorted(todo.items())))
+                     ", ".join(f"{e} ({a.get('radio') or a['friendly_name']})"
+                               for e, (_, a) in sorted(todo.items())))
 
     async def retire_sensors(self):
         """On the way out, say so — a relay should not hold on to a zone that no longer runs."""
@@ -1429,9 +1555,10 @@ class Controller:
                 pass
         log.info("LR3 AudioZone v%s — mode=%s our_ip=%s idle_timeout=%ds "
                  "buffer=%.1fs (%d KB @ %d kbps) — times in %s",
-                 os.environ.get("LR3_VERSION", "?"), self.mode, self.our_ip, self.idle_timeout,
+                 self.version, self.mode, self.our_ip, self.idle_timeout,
                  self.buffer_seconds, self.buffer_kb, self.bitrate,
                  f"{SITE_TZ} (librespot's own …Z stamps are UTC)" if SITE_TZ else "UTC")
+        self.record_version()
         if 0 < self.idle_timeout < IDLE_TIMEOUT_FLOOR:
             log.warning("idle_timeout is %ds. Switching a zone off flushes whatever the radio "
                         "has buffered but not yet played, and it runs several seconds — "
@@ -1456,6 +1583,8 @@ class Controller:
         if not self.ha_token:
             log.warning("no Supervisor token, neither in the environment nor in %s — the Home "
                         "Assistant sensors are disabled", S6_ENV_DIRS[0])
+        # In the background: a Supervisor that is slow to answer must not hold up the radios.
+        slug_task = asyncio.create_task(self.learn_addon_slug())
         if not self.remote_access:
             if not self.cred_cache_flag_ok:
                 log.warning("this librespot does not know --disable-credential-cache, so it "
@@ -1516,6 +1645,7 @@ class Controller:
                     pass
         finally:
             self._stopping = True
+            slug_task.cancel()
             for t in list(self._probes):
                 t.cancel()
             if self.rate_match:

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.8
+
+- **New sensor for a dashboard: `sensor.lr3_audiozone`.** Its state is the version running;
+  its attributes say which release of the add-on that is (this one is the 34th), how many
+  versions have run on this installation and when this one arrived, the last few with
+  their dates, when the add-on last started, and how many radios it found. The count per
+  installation starts with this release: nothing recorded updates before it, so every
+  installation begins at 1. A restart is not counted, only a change of version.
+- **Ready-made dashboard cards**:
+  [docs/karta-na-dashboard.md](https://github.com/vlioscz/LR3-AudioZone/blob/main/docs/karta-na-dashboard.md)
+  (in Czech) — one with the information above, which needs nothing else set up, and an
+  optional one with a restart button. The add-on now logs its own id, which the restart
+  action needs. Home Assistant lets only administrators restart an add-on, so for other
+  users the guide goes through a helper button and an automation. There is deliberately no "switch off"
+  button: with the add-on stopped, the radios keep trying to reconnect, about forty times
+  an hour.
+
 ## 0.5.7
 
 - **Stop on the radio now stops Spotify too — when it is the last radio listening.** Until

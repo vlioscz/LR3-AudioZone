@@ -115,6 +115,13 @@ automations: for instance, one LARA driving several speakers through relays can 
 according to which Spotify device was picked. A step-by-step guide with a ready-made
 automation (in Czech): [docs/rele-podle-zony.md](docs/rele-podle-zony.md).
 
+Since 0.5.8 there is also **`sensor.lr3_audiozone`** for the add-on itself: its state is the
+version running, and its attributes say which release that is, how many versions have run
+on this installation (counted from 0.5.8 on) and when the add-on last started. Ready-made
+dashboard cards are in [docs/karta-na-dashboard.md](docs/karta-na-dashboard.md) (in Czech):
+one with this information, which needs nothing else set up, and an optional one with a
+**restart button** that also works for users who are not administrators.
+
 ## ⚠️ A short `idle_timeout` cuts the ends off songs
 
 Ending a zone tells the radio to throw away everything it has received and not yet played, and

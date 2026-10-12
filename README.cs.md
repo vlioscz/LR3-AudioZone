@@ -109,6 +109,13 @@ automatizací: třeba jedna LARA s několika reproduktory za relé je může př
 které zařízení si kdo ve Spotify vybral. Postup krok za krokem i s hotovou automatizací:
 [docs/rele-podle-zony.md](docs/rele-podle-zony.md).
 
+Od 0.5.8 má senzor i addon sám, **`sensor.lr3_audiozone`**. Jeho stav je verze, která běží.
+V atributech je, kolikáté vydání to je, kolik verzí už na téhle instalaci běželo (počítá se
+od 0.5.8) a kdy addon naposledy nastartoval. Hotové karty na dashboard jsou
+v [docs/karta-na-dashboard.md](docs/karta-na-dashboard.md). Jedna ukazuje tyto informace
+a nic dalšího nepotřebuje. Druhá, volitelná, je **tlačítko pro restart**, které funguje
+i pro uživatele, který není administrátor.
+
 ## ⚠️ Krátký `idle_timeout` usekává konce skladeb
 
 Ukončení zóny rádiu zahodí všechno, co už přijalo a ještě nepřehrálo — a rádio je vždycky

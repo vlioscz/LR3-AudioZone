@@ -646,14 +646,15 @@ async def run():
         if ctl._ha_task:
             await ctl._ha_task
     await publish(1000.0)
-    assert sorted(posted) == sorted([(sa, "Dovnitr"), (sb, "off"), (sd, "LARA All")])
+    assert sorted(posted) == sorted([(sa, "Dovnitr"), (sb, "off"), (sd, "LARA All"),
+                                     (C.STATUS_SENSOR, ctl.version)]), posted
     posted.clear(); await publish(1001.0)
     assert posted == [], "nothing changed, nothing posted"
     ctl.target[B] = ctl.mount_for(B)
     await publish(1002.0)
     assert posted == [(sb, "LARA Obývák")], posted
     posted.clear(); await publish(1000.0 + C.HA_REFRESH + 1)
-    assert len(posted) == 3, "the periodic refresh re-posts everything"
+    assert len(posted) == 4, "the periodic refresh re-posts everything"
 
     def broken(e, s, a): raise OSError("401 Unauthorized")
     ctl.post_state = broken
@@ -865,6 +866,97 @@ async def run():
     assert killed == [101], killed
     assert open(os.path.join(C.STATE_DIR, "spotify_state_all")).read() == "stopped"
     print("47) the last radio on a zone stopping ends Spotify there; one of a group does not")
+
+    # The add-on's own sensor: version, which release, and how many versions ran here. The
+    # history lives in /data, gains an entry only when the version changes, and starts at the
+    # first version that kept one.
+    import json
+    import re
+    C.VERSIONS_FILE = os.path.join(tempfile.mkdtemp(prefix="lr3ver_"), "versions.json")
+    C.CHANGELOG = os.path.join(REPO, "lr3_audiozone", "CHANGELOG.md")
+    shipped = sum(1 for line in open(C.CHANGELOG, encoding="utf-8") if line.startswith("## "))
+    assert C.release_number() == shipped and shipped > 30
+    assert C.release_number(C.CHANGELOG + ".missing") is None
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d", C.local_now())
+    ctl = mk(radios=[(A, "Koupelna"), (B, "Obývák")])
+    assert ctl.release == shipped
+    ctl.version = "?"
+    assert ctl.record_version() == [] and not os.path.exists(C.VERSIONS_FILE), \
+        "an unknown version is never recorded"
+    ctl.version = "0.5.8"
+    said.clear(); C.log.addHandler(h)
+    ctl.record_version(); ctl.record_version()               # a restart does not count
+    C.log.removeHandler(h)
+    assert [v["version"] for v in ctl.versions] == ["0.5.8"]
+    assert sum("first version recorded" in m for m in said) == 1, said
+    ctl = mk(radios=[(A, "Koupelna"), (B, "Obývák")])
+    ctl.version = "0.5.9"
+    ctl.record_version()
+    assert [v["version"] for v in C.load_versions(C.VERSIONS_FILE)] == ["0.5.8", "0.5.9"]
+    state, attrs = ctl.status_state()
+    assert state == "0.5.9" and attrs["versions_here"] == 2 and attrs["counted_since"] == "0.5.8"
+    assert attrs["history"][0].startswith("0.5.9 (") and attrs["history"][1].startswith("0.5.8 (")
+    assert attrs["updated"] == ctl.versions[-1]["since"][:10] and attrs["release"] == shipped
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d", attrs["updated"])
+    assert attrs["radios"] == 2 and "addon" not in attrs
+    for n in range(10, 30):                                  # the sensor lists only the latest
+        ctl.version = f"0.5.{n}"; ctl.record_version()
+    _, attrs = ctl.status_state()
+    assert attrs["versions_here"] == 22 and len(attrs["history"]) == C.HISTORY_SHOWN
+    assert attrs["history"][0].startswith("0.5.29 ") and attrs["counted_since"] == "0.5.8"
+    open(C.VERSIONS_FILE, "w").write('{"history": [{"version": "0.5.8", "since": 1760000000}]}')
+    assert C.load_versions(C.VERSIONS_FILE) == [], "an entry status_state() cannot read is dropped"
+    open(C.VERSIONS_FILE, "w").write("{not json")
+    assert C.load_versions(C.VERSIONS_FILE) == []
+    ctl.record_version()
+    assert [v["version"] for v in C.load_versions(C.VERSIONS_FILE)] == ["0.5.29"], \
+        "a damaged file starts the count again rather than stopping the add-on"
+
+    # the restart button needs the Supervisor's id for the add-on; ask, and survive a refusal
+    class Info:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"result": "ok",
+                                           "data": {"slug": "0f1e2d3c_lr3_audiozone"}}).encode()
+    asked = []
+
+    def info(req, timeout=5):
+        asked.append((req.full_url, req.get_header("Authorization")))
+        return Info()
+    saved_open = C.urllib.request.urlopen
+    C.urllib.request.urlopen = info
+    ctl.ha_token = "tok"
+    try:
+        await ctl.learn_addon_slug()
+    finally:
+        C.urllib.request.urlopen = saved_open
+    assert asked == [("http://supervisor/addons/self/info", "Bearer tok")], asked
+    assert ctl.addon_slug == "0f1e2d3c_lr3_audiozone"
+    assert ctl.status_state()[1]["addon"] == "0f1e2d3c_lr3_audiozone"
+
+    def refused(req, timeout=5): raise OSError("403 Forbidden")
+    C.urllib.request.urlopen = refused
+    ctl.addon_slug = None
+    said.clear(); C.log.addHandler(h)
+    try:
+        await ctl.learn_addon_slug()
+    finally:
+        C.urllib.request.urlopen = saved_open
+        C.log.removeHandler(h)
+    assert ctl.addon_slug is None and any("could not ask the Supervisor" in m for m in said)
+    # ...in which case the container's name gives it away: the slug with "-" for "_"
+    saved_host = C.socket.gethostname
+    C.socket.gethostname = lambda: "162678ec-lr3-audiozone"
+    C.urllib.request.urlopen = refused
+    try:
+        await ctl.learn_addon_slug()
+        assert ctl.addon_slug == "162678ec_lr3_audiozone"
+        C.socket.gethostname = lambda: "homeassistant"
+        assert C.Controller.slug_from_hostname() is None
+    finally:
+        C.urllib.request.urlopen = saved_open
+        C.socket.gethostname = saved_host
+    print("48) sensor.lr3_audiozone: version, release number, this installation's history")
 
 
 asyncio.run(run())

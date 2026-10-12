@@ -57,6 +57,8 @@ COPY radio.liq.tpl /etc/lr3/radio.liq.tpl
 COPY lr3ctl /opt/lr3ctl
 # The manifest, purely so run.sh can print the version it is actually running.
 COPY config.yaml /etc/lr3/config.yaml
+# The changelog, so sensor.lr3_audiozone can say which release this is (one `## ` per version).
+COPY CHANGELOG.md /etc/lr3/CHANGELOG.md
 
 RUN chmod a+x /run.sh
 

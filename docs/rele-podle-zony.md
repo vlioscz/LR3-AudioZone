@@ -22,7 +22,7 @@ adresy rádia (stejně jako jméno mountu v logu, např. `lara_1030d9`).
 | `mac`, `ip` | adresa rádia |
 
 **Kde najdu přesná jména senzorů:** v logu addonu hned po startu je řádek
-`Home Assistant sensors: sensor.lr3_lara_1030d9 (LARA Terasa), …`. Nebo v HA
+`Home Assistant sensors: sensor.lr3_audiozone (LR3 AudioZone), sensor.lr3_lara_1030d9 (LARA Terasa), …`. Nebo v HA
 **Vývojářské nástroje → Stavy** a do filtru napsat `lr3`.
 
 Pár věcí, které je dobré vědět:
@@ -115,7 +115,7 @@ Při vypnutí zóny je to stejné.
 
 Nejdřív zkontroluj verzi: senzory fungují až od **0.5.1**. Pak hledej v logu addonu:
 
-- `Home Assistant sensors: sensor.lr3_lara_…`: senzory existují, hledej je ve
+- `Home Assistant sensors: … sensor.lr3_lara_…`: senzory existují, hledej je ve
   **Vývojářské nástroje → Stavy**,
 - `no Supervisor token …`: addon nedostal přístup k API,
 - `cannot update the Home Assistant sensors (…)`: API ho odmítlo, důvod je v závorce.
