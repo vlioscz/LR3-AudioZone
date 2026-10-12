@@ -37,7 +37,7 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.6.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.7.** 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -260,6 +260,17 @@ lines for all three radios are that breaker, NOT freezes. 0.5.6: a hold ends onl
 `paused`/`stopped`/`session_disconnected`, on ≥ max(60 s, idle_timeout) of quiet, or when
 another zone takes the radio; it survives the radio reconnecting (a breaker-cycled radio
 must not wake up playing).
+
+**0.5.7 — stop on the last radio ends Spotify (owner's rule).** The bundled librespot has no
+control API (checked in the image: no `org.mpris.MediaPlayer2` in the binary; its D-Bus code is
+zbus for Avahi), so the only way to stop Spotify is to end librespot's session:
+`Controller.end_spotify_session(mount)` SIGTERMs the zone's librespot, found via `/proc` by
+`LR3_MOUNT` (works under the pacer and under Liquidsoap), and writes `stopped` into its state
+file so the next tick does not push the radio back. The engine restarts librespot in ~3 s,
+listed again and idle. Triggered by a real CLI `stop` (not our echo) while Spotify plays, when
+no other radio is still on that mount: own zone → always; group → only the last radio.
+Verified in the image: the target zone's librespot got a new PID, the other zone's was
+untouched. Not yet observed on a phone how the Spotify app presents it (expected: stopped).
 
 ## ✅ The lag that grows: the radios run 0.33 % slow at 48 kHz (measured 2026-10-09, fixed in 0.5.0)
 

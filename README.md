@@ -56,6 +56,10 @@ you stop playing, the radio is released back to its own controls. No fallback ra
    outputs. The radio keeps showing the audio zone until somebody touches it; switching it back
    to the station list over port 61695 is **opt-in** (`park_on_zone_off`, off by default — see
    the note below).
+8. **The radio's own buttons:** only Spotify switches a radio into the audio zone — play and
+   pause on the radio are ignored. **Stop** silences that radio; if it was the last radio
+   playing that Spotify device (always, for a radio's own device; for a group, once its last
+   radio is stopped), Spotify itself is stopped as well, so the phone stops too.
 
 > **New radio on the network?** The set of Connect devices is fixed at start-up — after adding
 > a radio, **restart the add-on**. Until then the add-on does control it (it follows "LARA All"),

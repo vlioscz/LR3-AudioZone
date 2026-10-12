@@ -106,6 +106,7 @@ MUZZLE_NAG_EVERY = 600.0
 
 # --- rate_match: sending at the radio's pace instead of the CPU clock's (pacer.py) ------------
 PACER = "/opt/lr3ctl/pacer.py"
+PROC = "/proc"            # where end_spotify_session looks for a zone's librespot
 RATE_MATCH_AUTO = True    # what `rate_match: auto` means in this release
 # Where a newly seen mount starts, by output sample rate, before the buffer readings take over.
 # Positive = send faster. 48 kHz is measured directly: with the buffer held steady, Icecast
@@ -1033,11 +1034,68 @@ class Controller:
             # must not be undone either. The hold ends when that Spotify session ends.
             mount = self.target.get(mac)
             echo = time.monotonic() - self._stopped_at.get(mac, -1e9) < STOP_ECHO_GRACE
-            if not echo and mount and spotify_active(mount):
+            pressed = not echo and mount and spotify_active(mount)
+            if pressed:
                 self._held[mac] = mount
                 log.info("LARA %s stopped from its own controls while Spotify still plays to /%s "
                          "— leaving it alone until that Spotify session ends", mac, mount)
             await self.zone_off(mac)
+            # The last radio on a zone stopping means nobody is listening: end Spotify there
+            # too (owner's rule, 2026-10-11). The radio's stop cannot reach Spotify any other
+            # way, and left alone the phone plays on into nothing — 81 minutes once at site 5,
+            # until a track change switched the radio back on. One radio of a group stopping
+            # only silences that radio; the others play on.
+            if pressed and not any(m == mount for m in self.target.values()):
+                log.info("LARA %s was the last radio on /%s — ending the Spotify session there",
+                         mac, mount)
+                self.end_spotify_session(mount)
+
+    def end_spotify_session(self, mount: str) -> int:
+        """Stop Spotify on a zone — the only way this librespot offers: restart it.
+
+        The bundled librespot (raspotify 0.48.2 / 0.8.0) has no control interface: no MPRIS in
+        the binary, and the D-Bus code in it is only Avahi for zeroconf. Spotify's own cloud is
+        the sole channel to its playback, and only the phone talks to that. Ending librespot's
+        process ends its session, which Spotify treats as the speaker going away: the phone
+        stops playing to it. Whatever runs librespot (the pacer, or Liquidsoap with rate_match
+        off) starts a fresh one a few seconds later, back in the device list and idle.
+
+        Found through /proc by its LR3_MOUNT, so it works for either engine. The zone's state
+        file is set to `stopped` at once — otherwise its last word, `playing`, would have the
+        next tick push the radio straight back. Returns how many processes were signalled.
+        """
+        hit = 0
+        want = f"LR3_MOUNT={mount}".encode()
+        try:
+            pids = os.listdir(PROC)
+        except OSError:
+            pids = []
+        for pid in pids:
+            if not pid.isdigit():
+                continue
+            try:
+                with open(os.path.join(PROC, pid, "cmdline"), "rb") as f:
+                    exe = f.read().split(b"\0", 1)[0]
+                if not exe.endswith(b"librespot"):
+                    continue
+                with open(os.path.join(PROC, pid, "environ"), "rb") as f:
+                    env = f.read().split(b"\0")
+            except OSError:
+                continue
+            if want in env:
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                    hit += 1
+                except OSError:
+                    pass
+        try:
+            with open(os.path.join(STATE_DIR, f"spotify_state_{mount}"), "w") as f:
+                f.write("stopped")
+        except OSError:
+            log.exception("could not mark /%s as stopped", mount)
+        if not hit:
+            log.warning("no librespot found for /%s — Spotify there could not be stopped", mount)
+        return hit
 
     # --- actions ---------------------------------------------------------------
     def initial_volume(self) -> int:

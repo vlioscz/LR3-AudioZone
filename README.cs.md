@@ -52,6 +52,10 @@ ovládání. Žádné záložní rádio, žádné presety.
 7. Když Spotify přestane hrát a uplyne `idle_timeout`, addon pošle `strm-q` a ztlumí výstupy.
    Rádio zůstane ukazovat audio zónu, dokud se ho někdo nedotkne; vracení na seznam stanic
    přes port 61695 je **volitelné** (`park_on_zone_off`, standardně vypnuté — viz poznámka níže).
+8. **Tlačítka na rádiu:** do audio zóny rádio přepíná jen Spotify, play a pause na rádiu se
+   ignorují. **Stop** ztiší to rádio; když to bylo poslední rádio, které dané Spotify zařízení
+   hrálo (u vlastního zařízení rádia vždy, u skupiny až u posledního rádia z ní), zastaví se
+   i samotné Spotify — takže přestane hrát i telefon.
 
 > **Nové rádio v síti?** Sada Connect zařízení se určuje při startu — po přidání rádia
 > **restartuj add-on**. Do té doby ho addon sice řídí (jede v „LARA All"), ale vlastní

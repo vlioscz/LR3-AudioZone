@@ -814,6 +814,58 @@ async def run():
     C.time = real_time
     print("46) a stop from the radio itself is respected until that Spotify session ends")
 
+    # The owner's rule (2026-10-11): stop on the radio silences the radio; when it was the
+    # last radio on that zone, Spotify itself is stopped too. Own zone = always the last one.
+    C.time = clk
+    ctl = mk({"idle_timeout": 60}, radios=[(A, "Koupelna"), (B, "Obývák")])
+    ended = []
+    ctl.end_spotify_session = lambda m: ended.append(m) or 1
+    mine = ctl.mount_for(A)
+    active_mounts = {mine}
+    for _ in range(2):
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+    clk.advance(C.STOP_ECHO_GRACE + 1)
+    await ctl.on_cli_command(A, "stop")
+    assert ended == [mine], ended
+    # a group: the first radio to stop only silences itself, the last one ends Spotify
+    ended.clear(); ctl._held.clear()
+    active_mounts = {"all"}
+    for _ in range(3):
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+    assert ctl.target.get(A) == "all" and ctl.target.get(B) == "all", ctl.target
+    clk.advance(C.STOP_ECHO_GRACE + 1)
+    await ctl.on_cli_command(A, "stop")
+    assert ended == [] and ctl.target.get(B) == "all", "the others play on"
+    await ctl.on_cli_command(B, "stop")
+    assert ended == ["all"], ended
+    # the echo of our own strm-q is never a press, and never ends anything
+    ended.clear(); ctl._held.clear()
+    for _ in range(2):
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+    await ctl.zone_off(A)
+    await ctl.on_cli_command(A, "stop")
+    assert ended == []
+    C.time = real_time
+
+    # ...and the session is ended by finding that zone's librespot (either engine) via /proc
+    proc = tempfile.mkdtemp(prefix="proc_")
+    for pid, exe, mount in (("101", "librespot", "all"), ("102", "/usr/local/bin/librespot",
+                            "lara_x"), ("103", "/bin/sh", "all")):
+        os.makedirs(os.path.join(proc, pid))
+        open(os.path.join(proc, pid, "cmdline"), "wb").write(exe.encode() + b"\0--name\0Z\0")
+        open(os.path.join(proc, pid, "environ"), "wb").write(
+            b"PATH=/bin\0LR3_MOUNT=" + mount.encode() + b"\0")
+    killed = []
+    saved_proc, saved_kill = C.PROC, C.os.kill
+    C.PROC, C.os.kill = proc, (lambda pid, sig: killed.append(pid))
+    try:
+        assert C.Controller({}).end_spotify_session("all") == 1
+    finally:
+        C.PROC, C.os.kill = saved_proc, saved_kill
+    assert killed == [101], killed
+    assert open(os.path.join(C.STATE_DIR, "spotify_state_all")).read() == "stopped"
+    print("47) the last radio on a zone stopping ends Spotify there; one of a group does not")
+
 
 asyncio.run(run())
 print("\nALL OK")

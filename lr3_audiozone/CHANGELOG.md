@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.7
+
+- **Stop on the radio now stops Spotify too — when it is the last radio listening.** Until
+  now the radio's stop button could only silence the radio: Spotify on the phone played on
+  into nothing (once for 81 minutes) and still showed as playing. Now, when the radio you stop
+  is the last one on that Spotify device — always so for a radio's own device, and for a group
+  once its last radio is stopped — the add-on ends the Spotify session there, so the phone
+  stops too and the device shows up again, idle, a few seconds later. Stopping one radio of a
+  group that others are still playing only silences that one radio, as before.
+
 ## 0.5.6
 
 - **Fixed: a radio switched off with its own stop button could switch itself back on**,
