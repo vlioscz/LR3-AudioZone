@@ -37,7 +37,8 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.9** (rate_match clean-up; 0.5.8 added `sensor.lr3_audiozone`). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.10** (a zone starts only on `playing`; 0.5.9 rate_match clean-up;
+  0.5.8 added `sensor.lr3_audiozone`). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -271,6 +272,49 @@ listed again and idle. Triggered by a real CLI `stop` (not our echo) while Spoti
 no other radio is still on that mount: own zone → always; group → only the last radio.
 Verified in the image: the target zone's librespot got a new PID, the other zone's was
 untouched. Not yet observed on a phone how the Spotify app presents it (expected: stopped).
+
+**0.5.10 — librespot taking a session over by itself switched a radio on.** Site 5, 2026-10-13
+05:32: the dealer websocket dropped, librespot logged `trying to take over control
+automatically`, loaded the previous evening's last track at a stale position (`Invalid start
+position of 1906695 ms`) and emitted `loading`, then `paused` a second later. The 1 s tick saw
+`loading` (in ACTIVE_EVENTS) and pushed KP2 into its audio zone: two minutes of silence, then
+OFF. Eight such takeovers in six weeks of that log; only this one fell on a tick, but in the
+daytime it would cut off the station being listened to (the 2026-10-10 complaint, again).
+`Controller.spotify_playing()` now gates the start: a zone becomes active only once its
+session has `started` — an event outside PREPLAY_EVENTS (`loading`/`preloading`/
+`track_changed`), i.e. `playing` (`started`/`changed` in old librespot). A started session
+stays started through track changes (`end_of_track` → `loading` keeps the zone, as before) and
+ends on paused/stopped/session_disconnected or 60 s (HOLD_RELEASE_QUIET) of not being busy.
+A busy-but-not-playing session is logged after 10 s, and one that goes quiet without playing
+logs `loaded a track and stopped again without playing it`. ⚠️ The state file keeps only the
+latest event and a start within 30 s of a track's end is followed by `preloading` (the next
+track; librespot 0.8.0 `TimeToPreloadNextTrack`, immediate for a cached file) in well under a
+second — so the hook also writes `/tmp/spotify_played_<mount>` (a timestamp) on every
+`playing`/`started`/`changed`, and a new mark starts the session unless the latest event is a
+pause/stop (`spotify_played()`; the first look only notes the mark, an old one starts
+nothing). Found by the 0.5.10 review in simulation (half of such starts ~20 s late), before
+release. Cost: ON up to ~1 s later. `sensor_states` and `nag_if_muzzled` still use plain
+`spotify_active`; the CLI `pressed` check uses it OR `_spotify_started`, so a stop in the gap
+between two songs (`end_of_track`, 8 s for a failed track) holds the radio too — before, the
+next song switched it straight back on (not once the state says paused/stopped: the started
+flag lags a tick, and a stop in the same second as a pause in the app must not end it).
+Hardening from the final review: the hook writes both files via `.tmp` + `mv` (a read used to
+be able to hit a truncated, empty state = "session over"); `spotify_playing()` reads mark,
+then state, once each per zone (two reads let a takeover's `paused` slip between them); and
+`Controller.pause()` cuts the loop's 1 s wait short (0.2 s steps, `LOOP_SLICES`) when a mark
+changes — Icecast gives a joining radio no burst (`burst-size 0`), so pushing ~0.5 s after
+`playing` cut that much off the first song. Deferred (low): moving a radio from LARA All to
+its own device now waits for the own session's `playing` + ZONE_SETTLE (~2 s more than 0.5.9);
+two pre-existing group/own-zone hand-over quirks (a stop on own device while /all plays, a
+failed track in an own session) are unchanged since 0.5.9.
+
+**The radios' rate is per session, not per radio** (site 5, same log): KP2 settled at −3250
+on 10-11 and at −1350 on 10-12, both with a steady 109 KB buffer; Obývák −3250 on 10-13. The
+loop copes (it steers by the buffer; the learned base is only a starting point). The one
+consequence: on a shared mount radios ~2000 ppm apart leave the slower one ~45 B/s of surplus
+in Icecast — its 512 KB queue fills in ~3 h of continuous group play, then that radio is
+dropped and re-pushed (a short gap). Site 5 has not used LARA All since 10-01; noted, not
+changed.
 
 ## ✅ The lag that grows: the radios run 0.33 % slow at 48 kHz (measured 2026-10-09, fixed in 0.5.0)
 

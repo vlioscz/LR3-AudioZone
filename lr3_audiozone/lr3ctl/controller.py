@@ -65,6 +65,16 @@ ACTIVE_EVENTS = {"playing", "started", "track_changed", "changed", "loading", "p
 # lasted longer than this — a session left idle that long is over.
 HOLD_RELEASE_EVENTS = {"paused", "stopped", "session_disconnected"}
 HOLD_RELEASE_QUIET = 60.0
+# Busy, but not (yet) playing. Between two tracks of a running session these keep its zone on.
+# They must not START one: librespot also sends them when it takes a session over by itself
+# after its connection to Spotify dropped — at site 5 on 2026-10-13 at 05:32 it loaded the
+# previous evening's last track at a stale position and paused a second later, and we had
+# already switched KP2 into its audio zone. Eight such takeovers in six weeks of that log; the
+# same thing in the daytime would cut off the station somebody is listening to. Only an event
+# outside this set starts a zone: `playing` (`started`/`changed` in older librespot).
+PREPLAY_EVENTS = {"loading", "preloading", "track_changed"}
+PREPLAY_NOTE_AFTER = 10.0   # a session busy this long without playing is said in the log
+LOOP_SLICES = 5             # the loop's 1 s pause is cut short on a new `playing` (0.2 s steps)
 LIBRESPOT_LOG_BURST = 40      # most lines copied out of one librespot log in a single pass
 LIBRESPOT_LOG_CHUNK = 256_000  # most bytes read from one log per pass, so a huge file cannot
                                # stall the tick loop (and with it the SlimProto heartbeat)
@@ -250,8 +260,23 @@ def spotify_event(mount: str) -> str:
         return ""
 
 
-def spotify_active(mount: str) -> bool:
-    return spotify_event(mount) in ACTIVE_EVENTS
+def spotify_active(mount: str, ev: str | None = None) -> bool:
+    """Is Spotify busy with a session on this zone — from `ev` if already read."""
+    return (spotify_event(mount) if ev is None else ev) in ACTIVE_EVENTS
+
+
+def spotify_played(mount: str) -> str:
+    """The hook's mark of the last time Spotify really started playing on a zone ("" if none).
+
+    Separate from the state file because that one keeps only the latest event, and a start
+    within 30 s of a track's end is followed by `preloading` (the next track) in well under
+    the second between two ticks — which would hide the `playing` a zone now waits for.
+    """
+    try:
+        with open(os.path.join(STATE_DIR, f"spotify_played_{mount}")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def spotify_track(mount: str) -> tuple[str, str]:
@@ -368,6 +393,10 @@ class Controller:
         self._stat_seen: dict[str, tuple] = {}     # mac -> (stat_seq, when it last moved)
         self._blind: set[str] = set()              # macs we have already complained about
         self._spotify_was: set[str] = set()        # mounts Spotify was playing on last tick
+        self._spotify_started: set[str] = set()    # mounts whose session has really played
+        self._spotify_quiet: dict[str, float] = {}  # mount -> since when it is not busy
+        self._spotify_pending: dict[str, list] = {}  # mount -> [since, said] busy, not playing
+        self._spotify_mark: dict[str, str] = {}    # mount -> spotify_played() at the last tick
         self._held: dict[str, str] = {}            # mac -> mount its own buttons stopped
         self._held_quiet: dict[str, float] = {}    # mac -> since when its held zone is quiet
         self._stopping = False
@@ -1147,7 +1176,13 @@ class Controller:
             # must not be undone either. The hold ends when that Spotify session ends.
             mount = self.target.get(mac)
             echo = time.monotonic() - self._stopped_at.get(mac, -1e9) < STOP_ECHO_GRACE
-            pressed = not echo and mount and spotify_active(mount)
+            # In a running session's gap between two tracks too (`end_of_track`, eight seconds
+            # when a track fails to load): otherwise the next song switched it straight back on.
+            # (Not once Spotify has paused or stopped: the started flag lags by up to a tick, and
+            # a stop in the same second as a pause in the app must not end that paused session.)
+            pressed = not echo and mount and (
+                spotify_active(mount) or (mount in self._spotify_started
+                                          and spotify_event(mount) not in HOLD_RELEASE_EVENTS))
             if pressed:
                 self._held[mac] = mount
                 log.info("LARA %s stopped from its own controls while Spotify still plays to /%s "
@@ -1559,8 +1594,60 @@ class Controller:
         except (asyncio.TimeoutError, Exception):
             pass
 
+    def spotify_playing(self, now: float) -> set[str]:
+        """The zones whose Spotify session is playing — the ones that may drive radios.
+
+        A session starts on `playing`, never on `loading` alone (PREPLAY_EVENTS: librespot
+        resuming a session by itself) — seen in the state file, or as a new `spotify_played`
+        mark when another event overwrote it within the tick. Once started it stays so through a
+        track change or a track that fails to load, and ends when Spotify pauses or stops, the
+        session goes, or nothing has been busy for HOLD_RELEASE_QUIET — so a takeover hours
+        after a playlist simply ran out does not find it still open.
+        """
+        busy = set()
+        for z in self.zones:
+            m = z.mount
+            # One read of each, the mark first: the hook writes the state before the mark, so a
+            # new mark guarantees the state read after it is that `playing` or later. Two reads
+            # of the state let a takeover's `paused` land in between and start the zone.
+            mark = spotify_played(m)
+            ev = spotify_event(m)
+            if spotify_active(m, ev):
+                busy.add(m)
+            # It played since the last tick, whatever event came after (`preloading`, a failed
+            # preload's `unavailable`...) — unless that was Spotify pausing or stopping again.
+            # The first look at a mount only notes the mark: an old one starts nothing.
+            if self._spotify_mark.get(m, mark) != mark and ev not in HOLD_RELEASE_EVENTS:
+                self._spotify_started.add(m)
+                self._spotify_quiet.pop(m, None)    # its quiet starts over from this play
+            self._spotify_mark[m] = mark
+            if m in busy:
+                self._spotify_quiet.pop(m, None)
+                if m not in self._spotify_started and ev not in PREPLAY_EVENTS:
+                    self._spotify_started.add(m)
+                if m in self._spotify_started:
+                    self._spotify_pending.pop(m, None)
+                    continue
+                pending = self._spotify_pending.setdefault(m, [now, False])
+                if not pending[1] and now - pending[0] >= PREPLAY_NOTE_AFTER:
+                    pending[1] = True
+                    log.info("Spotify on /%s has been %s for %.0fs without playing — no radio "
+                             "is switched on until it plays", m, ev, now - pending[0])
+                continue
+            if m in self._spotify_pending:
+                del self._spotify_pending[m]
+                if m not in self._spotify_started:
+                    log.info("Spotify on /%s loaded a track and stopped again without playing "
+                             "it (%s) — librespot resuming a session by itself; no radio was "
+                             "switched on", m, ev or "no event")
+            quiet = now - self._spotify_quiet.setdefault(m, now)
+            if ev in HOLD_RELEASE_EVENTS or not ev or quiet >= HOLD_RELEASE_QUIET:
+                self._spotify_started.discard(m)
+        return busy & self._spotify_started
+
     async def tick(self):
-        active = {z.mount for z in self.zones if spotify_active(z.mount)}
+        now = time.monotonic()
+        active = self.spotify_playing(now)
         # Say which event started or stopped Spotify on a zone. Every "the radio switched itself
         # off" so far has needed this and not had it: a zone going quiet looked the same whether
         # someone pressed pause, the queue ran out, or librespot reported something that was
@@ -1570,7 +1657,6 @@ class Controller:
                      "is playing" if mount in active else "went quiet",
                      spotify_event(mount) or "no event yet")
         self._spotify_was = active
-        now = time.monotonic()
         for key in list(self.radios.keys()):
             mount = self.settled_zone_for(key, active, now)
             if key in self._held:
@@ -1612,6 +1698,23 @@ class Controller:
                     await self.zone_off(key)
 
     # --- main loop -------------------------------------------------------------
+    async def pause(self, stopping: asyncio.Event):
+        """The second between two passes of the loop — cut short when Spotify starts playing.
+
+        A zone starts on `playing` (0.5.10), and Icecast gives a radio no burst, only what is
+        written after it joins: pushing up to a second late cut that much off the first song.
+        So look at the hooks' marks five times a second and go round at once on a new one.
+        """
+        marks = {z.mount: spotify_played(z.mount) for z in self.zones}
+        for _ in range(LOOP_SLICES):
+            try:
+                await asyncio.wait_for(stopping.wait(), timeout=1.0 / LOOP_SLICES)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if any(spotify_played(m) != v for m, v in marks.items()):
+                return
+
     async def run(self):
         self._loop = asyncio.get_running_loop()
         stopping = asyncio.Event()
@@ -1708,10 +1811,7 @@ class Controller:
                     await self.publish_sensors(time.monotonic())
                 except Exception:
                     log.exception("updating the Home Assistant sensors failed")
-                try:
-                    await asyncio.wait_for(stopping.wait(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    pass
+                await self.pause(stopping)
         finally:
             self._stopping = True
             slug_task.cancel()

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.10
+
+- **Fixed: a radio could switch itself into the audio zone on its own.** When the connection
+  to Spotify drops for a moment, the Spotify part of the add-on sometimes resumes the last
+  session by itself: it loads the last song and pauses it a second later. The add-on took
+  the loading for playing and switched the radio on — at one site at 5:32 in the morning,
+  for two minutes of silence. In the daytime that would cut off the station someone is
+  listening to. Now a radio is switched on only once Spotify really plays. Starting music
+  from the phone is unaffected: the add-on now notices the music starting within a fifth of
+  a second, so the first song is not clipped. When a session loads and pauses by itself,
+  the log says so and no radio is touched.
+- **The radio's stop button between two songs now counts.** Pressed in the second of silence
+  between two tracks (or the few seconds when a track fails to load), it used to be ignored
+  and the next song switched the radio straight back on. Now it silences the radio as it
+  does mid-song.
+
 ## 0.5.9
 
 Housekeeping for the pacing that keeps the delay from growing. Nothing audible changes:

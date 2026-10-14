@@ -85,7 +85,18 @@ cat > /etc/lr3/spotify_event.sh <<'EOF'
 M="${LR3_MOUNT:-unknown}"
 case "${PLAYER_EVENT:-}" in
   playing|paused|stopped|loading|preloading|started|changed|track_changed|end_of_track|unavailable|session_disconnected)
-    printf '%s' "${PLAYER_EVENT}" > "/tmp/spotify_state_${M}"
+    # Přes .tmp + mv: controller jinak mohl trefit soubor zkrácený na nulu uprostřed zápisu
+    # a prázdný stav bere jako konec relace.
+    printf '%s' "${PLAYER_EVENT}" > "/tmp/spotify_state_${M}.tmp"       && mv -f "/tmp/spotify_state_${M}.tmp" "/tmp/spotify_state_${M}"
+    ;;
+esac
+# Každé opravdové spuštění se zapíše ještě zvlášť (0.5.10). Rádio se zapíná až na `playing`, ne
+# na `loading` (to posílá i librespot, když po výpadku spojení sám převezme starou relaci).
+# Jenže když hudba začne v posledních 30 s skladby, přijde hned za `playing` `preloading`
+# (přednačtení další) a controller, který se dívá jednou za vteřinu, by `playing` neviděl.
+case "${PLAYER_EVENT:-}" in
+  playing|started|changed)
+    date +%s%N > "/tmp/spotify_played_${M}.tmp"       && mv -f "/tmp/spotify_played_${M}.tmp" "/tmp/spotify_played_${M}"
     ;;
 esac
 # Metadata skladby pro displej LARY (ptá se na ně po LMS CLI: artist ? / current_title ?).

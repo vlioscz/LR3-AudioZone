@@ -27,7 +27,7 @@ D = "00:0a:59:11:22:33"   # no name reported
 events = []
 active_mounts = set()
 
-C.spotify_active = lambda mount: mount in active_mounts
+C.spotify_active = lambda mount, ev=None: mount in active_mounts
 
 
 class FakeSlim:
@@ -745,16 +745,19 @@ async def run():
     m = ctl.mount_for(A)
     state = os.path.join(C.STATE_DIR, f"spotify_state_{m}")
     saved_active = C.spotify_active
-    C.spotify_active = lambda mount: C.spotify_event(mount) in C.ACTIVE_EVENTS
+    C.spotify_active = lambda mount, ev=None: (C.spotify_event(mount) if ev is None else ev) in C.ACTIVE_EVENTS
     said.clear(); C.log.addHandler(h)
-    for ev in ("playing", "playing", "paused", "paused", "loading"):
+    for ev in ("playing", "playing", "end_of_track", "loading", "paused", "paused", "playing"):
         open(state, "w").write(ev)
         await ctl.tick()
     C.log.removeHandler(h)
     C.spotify_active = saved_active
     lines = [s for s in said if s.startswith("Spotify on")]
-    assert lines == [f"Spotify on /{m} is playing (playing)", f"Spotify on /{m} went quiet (paused)",
-                     f"Spotify on /{m} is playing (loading)"], lines
+    assert lines == [f"Spotify on /{m} is playing (playing)",
+                     f"Spotify on /{m} went quiet (end_of_track)",
+                     f"Spotify on /{m} is playing (loading)",     # the next track, same session
+                     f"Spotify on /{m} went quiet (paused)",
+                     f"Spotify on /{m} is playing (playing)"], lines
     print("44) each change of Spotify's state on a zone is logged once, with the event")
 
     # The site 5 complaint: "the radio switches off while I'm listening to radio". The LARA
@@ -1089,6 +1092,172 @@ async def run():
     assert all(abs(ppm + 3250) <= err + 1 for ppm, err in got), got
     assert got[-1][1] < 220 and abs(got[-1][0] + 3250) < 220, got[-1]
     print("50) the source rate converges on the truth, and its ± is honest")
+
+    # Site 5, 2026-10-13 05:32: librespot lost its connection, took the evening's session over
+    # by itself, loaded the last track and paused a second later — and KP2 was already in its
+    # audio zone. Only Spotify actually playing may switch a radio on; loading alone may not.
+    C.time = clk
+    saved_active = C.spotify_active
+    C.spotify_active = lambda mount, ev=None: (C.spotify_event(mount) if ev is None else ev) in C.ACTIVE_EVENTS
+    ctl = mk(radios=[(A, "Koupelna")])
+    m = ctl.mount_for(A)
+    state = os.path.join(C.STATE_DIR, f"spotify_state_{m}")
+
+    def pushes():
+        return [e for e in events if e[0] == "push"]
+    events.clear(); said.clear(); C.log.addHandler(h)
+    try:
+        open(state, "w").write("stopped")                   # last night's session, over
+        clk.advance(1); await ctl.tick()
+        for ev in ("loading", "track_changed", "paused"):    # the takeover
+            open(state, "w").write(ev)
+            clk.advance(1); await ctl.tick()
+        assert not pushes(), events
+        assert sum("without playing it" in s for s in said) == 1, said
+        # one that does not even pause: said once after a while, and still nothing switched on
+        open(state, "w").write("loading")
+        for _ in range(int(C.PREPLAY_NOTE_AFTER) + 3):
+            clk.advance(1); await ctl.tick()
+        assert sum("has been loading" in s for s in said) == 1, said
+        assert not pushes(), events
+        # a real start: the track plays a second later -> on
+        open(state, "w").write("playing")
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        assert ctl.target.get(A) == m and len(pushes()) == 1, events
+        # inside the session, the next track's loading keeps it on: no OFF, no second push
+        events.clear()
+        for ev in ("end_of_track", "loading", "track_changed", "playing", "end_of_track",
+                   "loading"):
+            open(state, "w").write(ev)
+            clk.advance(1); await ctl.tick()
+        assert ctl.target.get(A) == m and not events, events
+        # a playlist that simply ran out (no pause, no stop) closes the session after a minute
+        # of quiet, so a takeover hours later does not find it still open
+        open(state, "w").write("end_of_track")
+        for _ in range(int(max(C.HOLD_RELEASE_QUIET, ctl.idle_timeout)) + 3):
+            clk.advance(1); await ctl.tick()
+        assert ctl.target.get(A) is None, "the zone went off as usual"
+        events.clear()
+        open(state, "w").write("loading")
+        for _ in range(5):
+            clk.advance(1); await ctl.tick()
+        assert not pushes(), events
+    finally:
+        C.log.removeHandler(h)
+        C.spotify_active = saved_active
+        C.time = real_time
+    print("51) loading alone (librespot resuming a session by itself) never switches a radio on")
+
+    # A start within 30 s of a track's end: `preloading` (the next track) follows `playing` in
+    # well under the second between two ticks, so the state file never shows `playing`. The
+    # hook's separate mark does. An old mark, from before the add-on started, starts nothing.
+    C.time = clk
+    saved_active = C.spotify_active
+    C.spotify_active = lambda mount, ev=None: (C.spotify_event(mount) if ev is None else ev) in C.ACTIVE_EVENTS
+    ctl = mk(radios=[(A, "Koupelna")])
+    m = ctl.mount_for(A)
+    state = os.path.join(C.STATE_DIR, f"spotify_state_{m}")
+    mark = os.path.join(C.STATE_DIR, f"spotify_played_{m}")
+    events.clear()
+    try:
+        open(mark, "w").write("1000")                       # yesterday's
+        open(state, "w").write("preloading")
+        for _ in range(3):
+            clk.advance(1); await ctl.tick()
+        assert not pushes(), "an old mark is not a start"
+        open(state, "w").write("stopped")
+        clk.advance(1); await ctl.tick()
+        # loading -> track_changed -> playing -> preloading, all between two ticks
+        open(mark, "w").write("2000"); open(state, "w").write("preloading")
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        assert ctl.target.get(A) == m, "the mark says it played"
+        # ...a failed preload in between (unavailable, then the replacement's preloading)
+        open(state, "w").write("paused"); clk.advance(1); await ctl.tick()
+        for _ in range(int(ctl.idle_timeout) + 2):
+            clk.advance(1); await ctl.tick()
+        assert ctl.target.get(A) is None
+        events.clear()
+        open(mark, "w").write("3000"); open(state, "w").write("unavailable")
+        clk.advance(1); await ctl.tick()
+        open(state, "w").write("preloading")
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        assert ctl.target.get(A) == m, events
+        # played and paused again within one tick is not a start
+        open(state, "w").write("paused"); clk.advance(1); await ctl.tick()
+        for _ in range(int(ctl.idle_timeout) + 2):
+            clk.advance(1); await ctl.tick()
+        events.clear()
+        open(mark, "w").write("4000"); open(state, "w").write("paused")
+        for _ in range(3):
+            clk.advance(1); await ctl.tick()
+        assert not pushes(), events
+        # The radio's stop in the gap between two tracks of a running session is a press too:
+        # it holds the radio, instead of the next song switching it straight back on.
+        open(mark, "w").write("5000"); open(state, "w").write("playing")
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        assert ctl.target.get(A) == m
+        open(state, "w").write("end_of_track"); clk.advance(1); await ctl.tick()
+        clk.advance(C.STOP_ECHO_GRACE + 1)
+        ctl.end_spotify_session = lambda mount: 0
+        await ctl.on_cli_command(A, "stop")
+        assert ctl._held.get(A) == m, "a stop between two songs holds the radio"
+        open(state, "w").write("loading"); clk.advance(1); await ctl.tick()
+        open(mark, "w").write("6000"); open(state, "w").write("playing")
+        events.clear()
+        for _ in range(3):
+            clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        assert not pushes(), events
+    finally:
+        C.spotify_active = saved_active
+        C.time = real_time
+    print("52) a start the state file missed is caught by the hook's mark; a stop between two "
+          "songs holds the radio")
+
+    # The loop's one-second pause is cut short by a new `playing` mark (Icecast gives a radio
+    # no burst, so every fraction of a second late is cut off the first song) — and a stop in
+    # the same second as a pause in the app does not end that freshly paused session.
+    ctl = mk(radios=[(A, "Koupelna")])
+    m = ctl.mount_for(A)
+    mark = os.path.join(C.STATE_DIR, f"spotify_played_{m}")
+    open(mark, "w").write("7000")
+    stop_ev = asyncio.Event()
+
+    async def bump():
+        await asyncio.sleep(0.25)
+        open(mark, "w").write("7001")
+    t0 = time.monotonic()
+    await asyncio.gather(ctl.pause(stop_ev), bump())
+    assert time.monotonic() - t0 < 0.7, "a new mark ends the pause early"
+    t0 = time.monotonic()
+    await ctl.pause(stop_ev)
+    assert 0.9 < time.monotonic() - t0 < 1.5, "without one it is the usual second"
+    stop_ev.set(); t0 = time.monotonic()
+    await ctl.pause(stop_ev)
+    assert time.monotonic() - t0 < 0.1, "and shutting down is not delayed"
+    C.time = clk
+    saved_active = C.spotify_active
+    C.spotify_active = lambda mount, ev=None: (
+        C.spotify_event(mount) if ev is None else ev) in C.ACTIVE_EVENTS
+    state = os.path.join(C.STATE_DIR, f"spotify_state_{m}")
+    try:
+        open(state, "w").write("playing")
+        clk.advance(C.ZONE_SETTLE + 1); await ctl.tick()
+        assert ctl.target.get(A) == m
+        open(state, "w").write("paused")                     # the app pauses...
+        clk.advance(C.STOP_ECHO_GRACE + 1)
+        ended = []
+        ctl.end_spotify_session = lambda mount: ended.append(mount)
+        await ctl.on_cli_command(A, "stop")                  # ...and the radio's stop, before a tick
+        assert A not in ctl._held and ended == [], (ctl._held, ended)
+    finally:
+        C.spotify_active = saved_active
+        C.time = real_time
+    print("53) a new `playing` cuts the loop's pause short; a stop right after a pause in the app "
+          "leaves that session alone")
 
 
 asyncio.run(run())
