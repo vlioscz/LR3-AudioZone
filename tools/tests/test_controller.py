@@ -604,12 +604,15 @@ async def run():
     other = C.Controller({"samplerate": 44100})
     other.load_rates()
     assert other.rate_base == {} and other.default_ppm() == 0.0
-    # A file from 0.5.0/0.5.1 was learned through the lossy pacer: ~5000 ppm off. Ignore it.
+    # A file from 0.5.0/0.5.1 was learned through the lossy pacer: ~3800 ppm off. Ignore it.
     old = os.path.join(C.DATA_DIR, "rate_ppm.json")
     data = __import__("json").load(open(old)); data.pop("v")
     __import__("json").dump(data, open(old, "w"))
+    said.clear(); C.log.addHandler(h)
     stale = C.Controller({}); stale.load_rates()
+    C.log.removeHandler(h)
     assert stale.rate_base == {}, "rates saved by the 0.5.0 pacer must not be reused"
+    assert any("not reused" in m for m in said), "and the log says so"
     off = C.Controller({"rate_match": "off"})
     assert not off.rate_match and C.Controller({"rate_match": "on"}).rate_match
     print("39) learned rates are kept across restarts at the same sample rate only")
@@ -624,8 +627,8 @@ async def run():
     for flag in ("--backend", "pipe", "--format", "S16", "--enable-volume-normalisation",
                  "--onevent", "/etc/lr3/spotify_event.sh", "--system-cache"):
         assert flag in argv, flag
-    assert cfg["initial_ppm"] == -4800.0 and cfg["samplerate"] == 48000
-    assert float(open(cfg["rate_file"]).read()) == -4800.0
+    assert cfg["initial_ppm"] == C.DEFAULT_PPM[48000] == -3250.0 and cfg["samplerate"] == 48000
+    assert float(open(cfg["rate_file"]).read()) == -3250.0
     print("40) the pacer is configured with librespot's own flags and the starting rate")
 
     # Home Assistant sensors: one per radio, the Spotify device it plays or "off". Posted when
@@ -715,8 +718,14 @@ async def run():
     assert poll(30_000_000, 8_100_000, 1) == [], "first poll of a new session: no comparison"
     assert poll(30_000_000 + 7_200_000, 8_100_000 + 7_100_000, 1, pushed=True) == [], \
         "a radio rejoined since the last poll: not like for like"
-    line = poll(30_000_000 + 2 * 7_200_000, 8_100_000 + 7_100_000 + 7_200_000, 1)
-    assert line and "source 24000 B/s" in line[0], line
+    r0, s0 = 30_000_000 + 2 * 7_200_000, 8_100_000 + 7_100_000 + 7_200_000
+    line = poll(r0, s0, 1)
+    assert line and "source" not in line[0], "still filling: no source rate yet"
+    ctl._rate_settled.add(m)                         # the initial fill is over
+    line = poll(r0 + 7_200_000, s0 + 7_200_000, 1)
+    assert line and "source" not in line[0], "the steady span starts here"
+    line = poll(r0 + 2 * 7_200_000, s0 + 2 * 7_200_000, 1)
+    assert line and "source 24000 B/s (+0 ±16667 ppm over 5 min)" in line[0], line
     # The two clocks disagreeing (the suspected cause of "+600 ppm" at the first site) is said.
     real_wall = clk.time
     clk.time = lambda: 1.7e9 + clk.t * (1 - 0.0038)
@@ -957,6 +966,129 @@ async def run():
         C.urllib.request.urlopen = saved_open
         C.socket.gethostname = saved_host
     print("48) sensor.lr3_audiozone: version, release number, this installation's history")
+
+    # The learned base waits for each session's initial fill: filling the radio from ~60 KB is
+    # us sending fast on purpose, not the radio playing fast. Integrating it made every short
+    # session save a rate ~1000 ppm fast (-2256 where the radios take -3260, 2026-10-14).
+    def session(minutes, start_x=61440.0):
+        ctl = mk(radios=[(A, "Koupelna")])
+        mine = ctl.mount_for(A)
+        pr = PR(); ctl.slim.players[A] = pr; ctl.target[A] = mine
+        d = ctl.default_ppm()                       # the radio plays exactly where we start
+        ctl.rate_ppm[mine] = d
+        x, q, t = start_x, 0.0, 0.0
+        for _ in range(minutes * 60 // 5):
+            t += 5.0
+            q += RATE * (1 + ctl.rate_ppm[mine] / 1e6) * 5
+            out = RATE * (1 + d / 1e6) * 5
+            take = min(q, SIZE - (x - out))
+            q -= take; x = x - out + take
+            pr.in_buf, pr.in_buf_at = int(x + rnd.uniform(-2500, 2500)), t
+            ctl.update_rates(t)
+        return ctl.rate_base[mine] - d
+    for minutes in (12, 240):
+        assert abs(session(minutes)) < 300, f"{minutes} min: learned {session(minutes):+.0f}"
+    saved_band = C.RATE_SETTLE_BAND
+    C.RATE_SETTLE_BAND = 1e9                        # = 0.5.2–0.5.8: learning from the first reading
+    try:
+        assert session(12) > 600, "the test must see the old windup"
+    finally:
+        C.RATE_SETTLE_BAND = saved_band
+    # A base far enough off can hold the buffer outside the band on the proportional term
+    # alone; after RATE_SETTLE_MAX it learns anyway, or it never would.
+    ctl = mk(radios=[(A, "Koupelna")])
+    mine = ctl.mount_for(A)
+    pr = PR(); ctl.slim.players[A] = pr; ctl.target[A] = mine
+    b0, t = ctl.default_ppm(), 0.0
+    for _ in range(int(C.RATE_SETTLE_MAX // 5) - 1):
+        t += 5.0; pr.in_buf, pr.in_buf_at = 70000, t; ctl.update_rates(t)
+    assert ctl.rate_base[mine] == b0, "still filling: the base has not moved"
+    for _ in range(3):
+        t += 5.0; pr.in_buf, pr.in_buf_at = 70000, t; ctl.update_rates(t)
+    assert ctl.rate_base[mine] > b0, "fifteen minutes in, it learns even outside the band"
+    pr.in_buf_at = t - 2 * C.RATE_FRESH
+    t += 5.0; ctl.update_rates(t)
+    assert mine not in ctl._rate_settled, "readings gone: the next ones begin a new session"
+    # ...and so does a radio joining a group that is already playing (or re-pushed after an
+    # underrun): the other radio keeps the session alive, so only the push can say so.
+    def join(band=None):
+        saved = C.RATE_SETTLE_BAND
+        if band is not None:
+            C.RATE_SETTLE_BAND = band
+        try:
+            ctl = mk(radios=[(A, "Koupelna"), (B, "Obývák")])
+            g = C.GROUP_MOUNT
+            d = ctl.default_ppm()
+            ctl.rate_ppm[g] = d
+
+            class R: mode, _stall_logged, buf_size = "play", False, SIZE
+            ra, rb = R(), R()
+            ctl.slim.players.update({A: ra, B: rb}); ctl.target[A] = g
+            xs, qs, t = {A: ctl.rate_target(SIZE), B: 61440.0}, {A: 0.0, B: 0.0}, 100.0
+            for step in range(60 * 60 // 5 + 10 * 60 // 5):    # A alone for 1 h, then B too
+                t += 5.0
+                if step == 60 * 60 // 5:
+                    ctl.target[B] = g
+                    ctl._mount_pushed_at[g] = ctl._repushed_at[B] = t - 2.0
+                for mac, r in ((A, ra), (B, rb)):
+                    if ctl.target.get(mac) != g:
+                        continue
+                    qs[mac] += RATE * (1 + ctl.rate_ppm[g] / 1e6) * 5
+                    out = RATE * (1 + d / 1e6) * 5
+                    take = min(qs[mac], SIZE - (xs[mac] - out))
+                    qs[mac] -= take; xs[mac] = xs[mac] - out + take
+                    r.in_buf, r.in_buf_at = int(xs[mac] + rnd.uniform(-2500, 2500)), t
+                ctl.update_rates(t)
+            return ctl.rate_base[g] - d
+        finally:
+            C.RATE_SETTLE_BAND = saved
+    assert abs(join()) < 300, f"a radio joining a playing group: learned {join():+.0f}"
+    assert join(band=1e9) > 600, "the test must see the windup the push now prevents"
+    # A reading from before a radio's latest push belongs to its old stream (push_stream sets
+    # mode=play at once): it must not start the new mount's session as if already full.
+    ctl = mk(radios=[(A, "Koupelna")])
+    g = C.GROUP_MOUNT
+
+    class R2: mode, _stall_logged, buf_size = "play", False, SIZE
+    r = R2(); r.in_buf, r.in_buf_at = 108000, 50.0
+    ctl.slim.players[A] = r
+    ctl.target[A] = g
+    ctl._repushed_at[A] = ctl._mount_pushed_at[g] = 51.0
+    ctl.update_rates(52.0)
+    assert g not in ctl._rate_settled and g not in ctl._rate_x, "the old stream's reading counts"
+    print("49) the learned rate ignores every fill — a session's, a joining radio's — and "
+          "cannot get stuck waiting for it")
+
+    # The source rate in the backlog line. Icecast refreshes its byte counter only every 5 s, so
+    # the 5-minute difference read 0.17 % low nine times in ten and 1.5 % high the tenth — and
+    # the low reading became DEFAULT_PPM -4800. Measured from one steady point it converges on
+    # the truth, and the ± it prints always covers the error.
+    ctl = mk(radios=[(A, "Koupelna")])
+    m = ctl.mount_for(A)
+    ctl._rate_settled.add(m)
+    true = 24000 * (1 - 3250e-6)
+    t0 = clk.t
+    C.time = clk
+    C.urllib.request.urlopen = lambda req, timeout=5: Resp()
+    said.clear(); C.log.addHandler(h)
+    try:
+        for _ in range(80):
+            clk.advance(C.BACKLOG_EVERY + 0.49)
+            n = int(true * 5 * ((clk.t - t0 + 2.3) // 5))     # what Icecast last published
+            xml["v"] = (f"<icestats><source mount='/{m}'><total_bytes_read>{10**9 + n}"
+                        f"</total_bytes_read><total_bytes_sent>{n}</total_bytes_sent>"
+                        f"<listeners>1</listeners></source></icestats>")
+            ctl.measure_backlog()
+    finally:
+        C.log.removeHandler(h)
+        C.urllib.request.urlopen = saved_open
+        C.time = real_time
+    got = [__import__("re").search(r"source \d+ B/s \(([-+]\d+) ±(\d+) ppm", s) for s in said]
+    got = [(int(g.group(1)), int(g.group(2))) for g in got if g]
+    assert len(got) >= 77, said[:3]
+    assert all(abs(ppm + 3250) <= err + 1 for ppm, err in got), got
+    assert got[-1][1] < 220 and abs(got[-1][0] + 3250) < 220, got[-1]
+    print("50) the source rate converges on the truth, and its ± is honest")
 
 
 asyncio.run(run())

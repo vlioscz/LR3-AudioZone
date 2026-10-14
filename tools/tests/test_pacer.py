@@ -30,7 +30,7 @@ print(f"pacer: {elapsed:.0f} s at -3250 ppm -> {total} frames, {total - want:+.0
 
 # --- the rate nudged every 5 s, as the controller does, on a slow ~27 ms loop -----------------
 # 0.5.0 re-anchored at what had been emitted and so forgave one tick per change: -0.5 % of the
-# output, which the first site showed as the loop settling ~5000 ppm away from the truth.
+# output, which the first site showed as the loop settling ~3800 ppm away from the truth.
 import random  # noqa: E402
 rnd = random.Random(3)
 t, ideal, next_poll, ppm = 0.0, 0.0, 0.0, 500.0

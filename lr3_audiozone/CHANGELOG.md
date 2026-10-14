@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.9
+
+Housekeeping for the pacing that keeps the delay from growing. Nothing audible changes:
+the radios are steered by their own buffer, as before. What changes is where each session
+starts and what the log says.
+
+- **New zones start from the radios' real rate.** At 48 kHz the LARAs measured so far play
+  about 0.33 % slower than nominal (−3250 ppm); each site still learns its own. 0.5.2 put −4800 there, misread from Icecast's byte
+  counter, which Icecast refreshes only every five seconds. A six-hour session on 0.5.8
+  showed the true figure three independent ways.
+- **The rate a zone learns is no longer skewed by the start of each session.** Filling the
+  radio's buffer at the start was being learned as if the radio played fast. After a short
+  session the saved rate was off by about 1000 ppm, and the next session overshot the
+  buffer target for over an hour. Now learning starts once the buffer is full enough — also when a radio joins a group
+  that is already playing.
+  Rates saved by earlier versions are discarded once, and the log says so.
+- **The `source` figure in the five-minute log line is honest.** It is averaged over the
+  whole steady part of the session and shows its margin of error. Until now the figure
+  was wrong by 0.17 % most of the time and by 1.5 % now and then.
+
 ## 0.5.8
 
 - **New sensor for a dashboard: `sensor.lr3_audiozone`.** Its state is the version running;

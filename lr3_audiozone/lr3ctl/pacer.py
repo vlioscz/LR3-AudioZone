@@ -88,10 +88,10 @@ class Pacer:
         if ppm != self.ppm:
             # Re-anchor where the OLD rate had got to by now, so the new one applies from here
             # on without rewriting the past. 0.5.0 anchored at `emitted` instead, which quietly
-            # forgave whatever had come due since the last tick — ~25 ms, every time the
-            # controller nudged the rate, i.e. every 5 s. That is 0.5 % of the output, and it
-            # is exactly what the first site showed: the loop settled at "+600 ppm" while
-            # Icecast counted 23 885 B/s actually leaving (-4800).
+            # forgave whatever had come due since the last tick — ~20 ms, every time the
+            # controller nudged the rate, i.e. every 5 s. That is ~0.4 % of the output, and it
+            # is what the first site showed: the loop settled at "+570 ppm" while the radios
+            # were taking ~23 920 B/s (-3260). Since this fix the two agree to ~50 ppm.
             self._t0, self._n0 = now, self._target(now)
             self.ppm = ppm
 

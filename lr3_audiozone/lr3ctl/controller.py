@@ -110,15 +110,18 @@ PACER = "/opt/lr3ctl/pacer.py"
 PROC = "/proc"            # where end_spotify_session looks for a zone's librespot
 RATE_MATCH_AUTO = True    # what `rate_match: auto` means in this release
 # Where a newly seen mount starts, by output sample rate, before the buffer readings take over.
-# Positive = send faster. 48 kHz is measured directly: with the buffer held steady, Icecast
-# counted 23 885 B/s leaving for the radios per wall-clock second, three hours running
-# (2026-10-10, 0.5.1, 28 readings) — -4800 ppm. The earlier -3250 was relative to Liquidsoap,
-# which on that box evidently did not deliver exactly 24 000 B/s either. 44.1 kHz has only
-# ever been measured against Liquidsoap, so it starts from nothing and is learned.
-DEFAULT_PPM = {48000: -4800.0, 44100: 0.0}
+# Positive = send faster. 48 kHz: -3250, the same on one install three independent ways — the
+# Icecast backlog under Liquidsoap (2026-10-09), the pacer's settled rate over a 6 h 22 min
+# session with the backlog at ±4 B/s (0.5.8, 2026-10-14: -3260), and the radios' own byte
+# counters (23 923 B/s). 0.5.2–0.5.8 started from -4800, read off Icecast's source counter —
+# which Icecast refreshes only every 5 s, so most 5-minute polls read 0.17 % low and every
+# ~10th 1.5 % high; -4800 was the low reading (see source_rate). 44.1 kHz has only ever
+# been measured against Liquidsoap, so it starts from nothing and is learned.
+DEFAULT_PPM = {48000: -3250.0, 44100: 0.0}
 # Bumped when saved rates stop meaning what they meant: 0.5.0/0.5.1 learned theirs through a
-# pacer that lost ~0.5 % on every rate change, so those numbers are ~5000 ppm too high.
-RATE_FILE_VERSION = 2
+# pacer that lost ~0.4 % on every rate change (v1); 0.5.2–0.5.8 integrated each session's
+# initial fill as if it were a rate error, ~1000 ppm too fast after a short session (v2).
+RATE_FILE_VERSION = 3
 RATE_EVERY = 5.0          # one steering decision per heartbeat, which is how often STATs come
 RATE_FRESH = 15.0         # a buffer reading older than this is not used
 # Aim the radio's own buffer this far below full. A full buffer is the one state we cannot
@@ -129,6 +132,14 @@ RATE_HEADROOM = 20480
 # few-KB jitter in single readings does nothing audible and fast enough to settle a start.
 RATE_KP = 0.25
 RATE_TI = 1800.0          # the learned base rate follows the error on a half-hour scale
+# The base only learns once a session's initial fill is over. Filling the radio from ~60 KB to
+# the target is us sending fast on purpose, not the radio playing fast, and integrating it
+# pushed the base ~1000 ppm fast in every session (0.5.2–0.5.8: a short one saved -2256 where
+# the radios take -3260, and a long one began by overshooting to 115 KB). Over = within this of
+# the target, or this long into the session — so a base that is far off, holding the buffer
+# outside the band on the proportional term alone, cannot stop the learning for good.
+RATE_SETTLE_BAND = 8192
+RATE_SETTLE_MAX = 900.0
 # A hard bound either side of zero. The measured offsets are -3250 and +1640 ppm; anything
 # far past them means the readings are not what we think, and then the damage stays small.
 RATE_LIMIT = 8000.0
@@ -322,6 +333,8 @@ class Controller:
         self.rate_ppm: dict[str, float] = {}       # mount -> rate in force, ppm
         self._rate_written: dict[str, float] = {}  # mount -> last value written for its pacer
         self._rate_x: dict[str, float] = {}        # mount -> smoothed buffer reading, bytes
+        self._rate_since: dict[str, float] = {}    # mount -> when its current session began
+        self._rate_settled: set[str] = set()       # mounts whose initial fill is over
         self._rate_at = 0.0
         self._rate_saved_at = 0.0
         self.cli_port = int(opt(cfg, "cli_port", DEFAULT_CLI_PORT))
@@ -348,6 +361,7 @@ class Controller:
         self._backlog_at = 0.0                     # last Icecast stats poll
         self._backlog_wall = 0.0                   # the same, by the wall clock
         self._backlog_prev: dict[str, tuple] = {}  # mount -> (read, sent, listeners)
+        self._source_from: dict[str, tuple] = {}   # mount -> (bytes read, when) at steady start
         self._mount_pushed_at: dict[str, float] = {}  # mount -> when a radio last joined it
         self._probes: set[asyncio.Task] = set()    # liveness probes in flight
         self._backlog_warned = False
@@ -710,8 +724,19 @@ class Controller:
                 saved = json.load(f)
         except (OSError, ValueError):
             return
-        if (saved.get("v") != RATE_FILE_VERSION or saved.get("samplerate") != self.samplerate
-                or saved.get("bitrate") != self.bitrate):
+        if not isinstance(saved, dict):
+            return
+        # Say why, once: 0.5.2 dropped the old file without a word, and the only trace of it
+        # was a line that was missing from the log.
+        if saved.get("v") != RATE_FILE_VERSION:
+            log.info("rate_match: the rates saved by an earlier version are not reused (they "
+                     "were learned differently) — every zone starts from %+.0f ppm",
+                     self.default_ppm())
+            return
+        if saved.get("samplerate") != self.samplerate or saved.get("bitrate") != self.bitrate:
+            log.info("rate_match: the saved rates were learned at %s Hz / %s kbps, not %d Hz / "
+                     "%d kbps — every zone starts from %+.0f ppm", saved.get("samplerate"),
+                     saved.get("bitrate"), self.samplerate, self.bitrate, self.default_ppm())
             return
         for mount, ppm in (saved.get("ppm") or {}).items():
             try:
@@ -742,6 +767,7 @@ class Controller:
         it plays, the level climbs; slower, it sinks. So hold it at `rate_target` with a slow PI
         loop: the proportional part answers the reading, the integral part (`rate_base`) learns
         the radio's true offset and is saved, so the next start begins where this one ended.
+        The integral waits for each session's initial fill to end (`RATE_SETTLE_BAND`).
 
         On a shared mount (a group) the hungriest radio decides: running one dry is a dropout,
         whereas a radio that plays a few ppm slower than its partners just fills up and sheds
@@ -758,20 +784,39 @@ class Controller:
             readings = []
             for mac, mount in self.target.items():
                 p = self.slim.players.get(mac) if mount == m else None
+                # A reading from before the radio's latest push is about the stream it had
+                # then: push_stream sets mode=play at once, and the old ~108 KB would start the
+                # new mount's session as if it were already full.
                 if (p is None or p.mode != "play" or p._stall_logged or not p.buf_size
-                        or now - p.in_buf_at > RATE_FRESH):
+                        or now - p.in_buf_at > RATE_FRESH
+                        or p.in_buf_at <= self._repushed_at.get(mac, -1e9)):
                     continue
                 readings.append((p.in_buf, p.buf_size))
             if not readings:
-                self._rate_x.pop(m, None)     # nothing to steer by: hold the rate as it is
+                self._rate_x.pop(m, None)     # nothing to steer by: hold the rate as it is,
+                self._rate_settled.discard(m)  # and the next readings begin a new session
                 continue
             raw = min(r[0] for r in readings)
             size = min(r[1] for r in readings)
             x = self._rate_x.get(m)
-            x = raw if x is None else x + 0.3 * (raw - x)
+            if (x is None or self._mount_pushed_at.get(m, -1e9)
+                    > self._rate_since.get(m, -1e9)):
+                # A new session — or a radio joined this one since it began (a group gaining a
+                # member, a re-push after an underrun): its fill is the same deliberate
+                # catch-up, and the hungriest radio is the one filling.
+                x = raw
+                self._rate_since[m] = now
+                self._rate_settled.discard(m)
+            else:
+                x += 0.3 * (raw - x)
             self._rate_x[m] = x
             e = x - self.rate_target(size)
-            base = self.rate_base.get(m, self.default_ppm()) - RATE_KP / RATE_TI * e * dt
+            if m not in self._rate_settled and (
+                    e >= -RATE_SETTLE_BAND or now - self._rate_since[m] >= RATE_SETTLE_MAX):
+                self._rate_settled.add(m)
+            base = self.rate_base.get(m, self.default_ppm())
+            if m in self._rate_settled:
+                base -= RATE_KP / RATE_TI * e * dt
             base = max(-RATE_LIMIT, min(RATE_LIMIT, base))
             ppm = max(-RATE_LIMIT, min(RATE_LIMIT, base - RATE_KP * e))
             self.rate_base[m] = base
@@ -864,6 +909,31 @@ class Controller:
                     "switched. Set 'Ovládání LARA' back to 'slimproto' and restart the add-on.",
                     ", ".join(active))
 
+    def source_rate(self, mount: str, read: int, now: float) -> str:
+        """What left for the radios per wall-clock second, since this session went steady.
+
+        With the buffer held, this IS the radios' playback rate, whatever any clock says. But
+        Icecast refreshes `total_bytes_read` only every 5 s (`client_stats_update`), so the
+        5-minute difference 0.5.1–0.5.8 logged read 300 s of data over a 300.5 s poll nine
+        times in ten (0.17 % low) and 305 s the tenth (1.5 % high) — and the low reading was
+        taken for the rate, -4800 ppm instead of the real -3250. Measured from one fixed point
+        instead, the error is at most those 5 s over the whole span, and the line says so.
+        The span starts once the initial fill is over: that part is us sending fast on purpose.
+        Timed by the monotonic clock: NTP disciplines its rate like the wall clock's, but never
+        steps it, and a step would sit in a span hours long.
+        """
+        if self.rate_match and mount not in self._rate_settled:
+            self._source_from.pop(mount, None)
+            return ""
+        start = self._source_from.setdefault(mount, (read, now))
+        span = now - start[1]
+        if span <= 0:
+            return ""
+        bps = (read - start[0]) / span
+        nominal = self.bitrate * 1000 / 8
+        return (f"; source {bps:.0f} B/s ({(bps / nominal - 1) * 1e6:+.0f} ±{5 / span * 1e6:.0f}"
+                f" ppm over {span / 60:.0f} min)")
+
     def measure_backlog(self):
         """Measure the one part of the lag we have only ever guessed at.
 
@@ -887,7 +957,7 @@ class Controller:
         dt_wall = wall - was_wall if was_wall else 0.0
         # The pacer keeps time by the monotonic clock; Liquidsoap kept it by the wall clock,
         # which NTP corrects. They should agree to a few ppm, and at the first site they did —
-        # this line is what ruled the clocks out when the pacer settled ~5000 ppm off (that
+        # this line is what ruled the clocks out when the pacer settled ~3800 ppm off (that
         # turned out to be the pacer losing a tick per rate change, fixed in 0.5.2). Kept,
         # because a box whose clocks do disagree would mislead every rate we learn.
         if dt_wall > 0 and was:
@@ -925,6 +995,7 @@ class Controller:
                 # of the next session compare against the last one of the previous evening —
                 # a whole night of source bytes and none sent, logged as +2.6 MB/s.
                 self._backlog_prev.pop(mount, None)
+                self._source_from.pop(mount, None)
                 continue
             prev = self._backlog_prev.get(mount)
             self._backlog_prev[mount] = (read, sent, lis)
@@ -933,6 +1004,7 @@ class Controller:
             # counters went backwards because the source reconnected.
             if (not prev or prev[2] != lis or dt <= 0 or read < prev[0] or sent < prev[1]
                     or self._mount_pushed_at.get(mount, -1e9) > was):
+                self._source_from.pop(mount, None)
                 continue
             grew = (read - prev[0]) - (sent - prev[1]) / lis
             per_s = grew / dt
@@ -943,10 +1015,7 @@ class Controller:
                 x = self._rate_x.get(mount)
                 steer = (f"; pacing {self.rate_ppm[mount]:+.0f} ppm" +
                          (f", radio buffer {x / 1024:.0f} KB" if x is not None else ""))
-            if dt_wall > 0:
-                # What actually left for the radios, per second of wall-clock time: with the
-                # buffer steady, this IS the radios' playback rate, whatever any clock says.
-                steer += f"; source {(read - prev[0]) / dt_wall:.0f} B/s"
+            steer += self.source_rate(mount, read, now)
             log.info("mount /%s: Icecast backlog %+.0f B/s (%+.1f s of audio per hour, "
                      "%d listener(s))%s", mount, per_s,
                      per_s * 3600 / max(1, self.bitrate * 1000 / 8), lis, steer)

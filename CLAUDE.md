@@ -37,11 +37,11 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.8** (adds `sensor.lr3_audiozone` + a restart card). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.9** (rate_match clean-up; 0.5.8 added `sensor.lr3_audiozone`). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
-  0.5.2 fixed the pacer losing ~0.5 % on every rate change (the "+600 ppm" puzzle).
+  0.5.2 fixed the pacer losing ~0.4 % to its rate changes (the "+600 ppm" puzzle).
   Sensors confirmed in the field on 0.5.1. Still open: the **KP2 freeze** at site 5.
 
 ## Repo layout
@@ -306,7 +306,11 @@ in the zone path (`rate_match`, default `auto` = on; `off` restores Liquidsoap u
   the radio's reported `in_buf` (STAT, every 5 s), target `size − 20 KB` (~108 KB ≈ 4.6 s), the
   hungriest radio decides on a shared mount, clamp ±8000 ppm, learned base saved to
   `/data/rate_ppm.json` per mount (ignored if samplerate/bitrate changed). Starting points:
-  `DEFAULT_PPM = {48000: -4800, 44100: 0}` (0.5.2; see the field result below).
+  `DEFAULT_PPM = {48000: -3250, 44100: 0}` (0.5.9; −4800 in 0.5.2–0.5.8 was a misreading,
+  see below). Since 0.5.9 the integral (the learned base) only runs once a session's initial
+  fill is over (`RATE_SETTLE_BAND` 8 KB from target, or `RATE_SETTLE_MAX` 15 min in); a push
+  onto the mount (a radio joining a playing group, a re-push) starts that wait again, and a
+  buffer reading taken before the radio's latest push is not used.
 - **Pitch is untouched** — it is set by the radio's crystal, as before. `ppm` changes only how
   fast we ask Spotify for the next second of music.
 - Verified: 4-hour simulations for offsets −5000…+1640 ppm (incl. wrong-sign prior) settle at
@@ -329,15 +333,33 @@ vanished. Reproduced offline (27 ms loop, a change every 5 s: −5267 ppm vs −
 field); fixed by re-anchoring at the old rate's target; regression test in `test_pacer.py`.
 My clock-disagreement theory (wall stepped by NTP, monotonic not) was wrong and is retracted.
 
-Consequences: the radios' real rate at 48 kHz, per wall clock, is **−4800 ppm** (direct, not
-relative to Liquidsoap) → `DEFAULT_PPM[48000] = −4800`. The −3250 from the Liquidsoap era
-means Liquidsoap on that box delivered ~23 963 B/s, not 24 000 — unexplained (in Docker on a PC
-it is exact to 20 ppm; no latency messages in its log), and moot now that it is off by default.
-Rates saved by 0.5.0/0.5.1 are ~5000 ppm high, so `rate_ppm.json` carries `"v": 2` and older
-files are ignored. Function was never affected: the loop steers by the radio's buffer.
+~~Consequences: the radios' real rate at 48 kHz is −4800 ppm~~ — ❌ **WRONG, retracted
+2026-10-14.** The pacer bug was real; its size and the −4800 were not. **The radios take
+−3250 ppm at 48 kHz (~23 922 B/s)**, as the Liquidsoap-era backlog had already said — so
+Liquidsoap *did* deliver 24 000 B/s and there is no mystery there either.
 
-The `bytes_rx` counter itself is not trustworthy as a rate: on 0.4.9 (Liquidsoap) it climbed
-at ~30.4 KB/s once the radio's buffer was full, which no 24 kB/s source can deliver.
+What misled: Icecast refreshes a mount's `total_bytes_read` only every **5 s**
+(`client_stats_update = current + 5` in source.c). The 5-minute poll runs every ~300.5 s, so
+nine windows in ten hold 300 s of data (read **0.17 % low**: the "steady 23 885") and every
+~10th holds 305 s (**1.5 % high**: the "odd" 24 279–24 332 readings). −4800 was the low
+reading. Proof, from the colleague's 0.5.8 log (10-14, a 6 h 22 min session, 76 polls,
+backlog ±4 B/s, buffer 108 KB): pacing settled at −3260; the mean of all `source` readings
+gives −3104…−3268 depending on correction; the radios' own byte counters give 23 923 B/s;
+0.5.1's three hours give the same 23 923 from the radio counter. So in 0.5.1 the pacer
+believed +571 while sending ~−3280: the bug cost ~0.4 %, not 0.5 % (the offline reproduction
+"matched" a biased field number). The pacer has been exact since 0.5.2 (setting vs measured
+agree to ~50 ppm).
+
+0.5.9: `DEFAULT_PPM[48000] = −3250`; the `source` figure is measured from one fixed point
+since the session went steady, with its honest ± (≤ 5 s of data over the span); the base no
+longer integrates the initial fill (that windup saved −2256 / −2598 after short sessions and
+made the 10-14 start overshoot to 115 KB for 80 min — reproduced in a simulation, fixed:
+112 KB); `rate_ppm.json` is `"v": 3` and an ignored file is now logged once. Function was
+never affected by any of this: the loop steers by the radio's buffer.
+
+The `bytes_rx` counter is not trustworthy as a rate **while the radio's buffer is full**: on
+0.4.9 (Liquidsoap) it climbed at ~30.4 KB/s then, which no 24 kB/s source can deliver. With
+the buffer held below full (rate_match) it agrees with the corrected Icecast rate to ~0.01 %.
 
 ## The lag that grows over a session (history — the analysis before the measurement)
 
@@ -589,6 +611,14 @@ end (third-party install 2026-10-10: OFF 10:39:44 / 11:06:04, idle onset ~250 s 
 slower position may make `position_correction` more frequent). Unknown events now change
 nothing. Since 0.5.3 `tick()` also logs every active↔idle change with the event that caused it
 (`Spotify on /<mount> went quiet (paused)`), which is what this hunt lacked.
+**✅ Confirmed in the field 2026-10-14** (colleague's install, 0.5.8): a 6 h 22 min session,
+~144 track loads, three active→idle transitions in all, none of them an OFF mid-song; the
+OFF→ON-with-next-track signature last appears on 0.5.1 (10-10).
+Latent, harmless so far: librespot reports `unavailable` when the *preloaded next* track
+cannot be played, ~30 s before the current one ends, and that reads as idle (1 s there, the
+replacement loaded at once). Were the replacement ever to take ≥ `idle_timeout`, the zone
+would go OFF under an audible track. Not changed: treating `unavailable` as playing would be
+wrong when it is the current track.
 
 ⚠️ **The idle countdown must be cleared on every playing tick** (`tick()`), not only when a
 radio is pushed to a new mount — `route()` returns early once the radio is already on that
@@ -634,7 +664,9 @@ Implemented in **`lr3_audiozone/lr3ctl/elkoproto.py`** (self-tested against capt
 - **Obfuscation**: whole packet XORed with a fixed 1024-byte mask (embedded base64 in elkoproto.py),
   keyed by a random 0–699 int; magic header `FF FA FA FF`. `admin`/`elkoep` defaults.
 - **Discovery**: the probe is documented as a **UDP broadcast** to `255.255.255.255:61695`
-  (reply → DeviceID==3 = LARA; gives ip/name(win-1250)/mac/fw). ⚠️ **fw 3.7.001 never answers
+  (reply → DeviceID==3 = LARA; gives ip/name(win-1250)/mac/fw). (The colleague's three
+  3.7.001 units DO answer it — all 20 starts in one log — so what follows is about the
+  reference unit and its network, not the firmware as such.) ⚠️ **fw 3.7.001 never answers
   it** — not broadcast, not directed broadcast, not unicast, no variant byte helps. The identical
   probe sent over **TCP 61695** answers instantly and `parse_discovery_reply` takes it unchanged.
   That TCP probe is the **only** source of the device's user-assigned name (e.g. "LARA Koupelna"),
