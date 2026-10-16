@@ -37,8 +37,8 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.10** (a zone starts only on `playing`; 0.5.9 rate_match clean-up;
-  0.5.8 added `sensor.lr3_audiozone`). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.11** (groups of one/all/overlapping radios; 0.5.10 a zone starts only
+  on `playing`; 0.5.9 rate_match clean-up; 0.5.8 added `sensor.lr3_audiozone`). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).
@@ -87,6 +87,19 @@ fallback. Device names come from the radio's config, optionally prefixed "LARA "
 (`lara_name_prefix`; never doubled if the name already starts with LARA). Duplicate names get a
 MAC tail. `Controller.render_liq()` fills `radio.liq.tpl` per zone — **`run.sh` no longer starts
 Liquidsoap**, the controller owns those processes and restarts any that die (`supervise_zones`).
+
+**Custom groups (`groups`)** sit between the per-radio zones and "LARA All". Since **0.5.11**
+a group may hold one radio, all radios, or the same radios as another group — a second name
+for the same speakers is what a relay automation on the per-radio sensor needs to tell "terrace,
+seating" from "terrace, everything" (`docs/rele-podle-zony.md`). Owner's decision 2026-10-16,
+reversing 2026-10-08's "keep it out, the colleague forks it": the colleague never forked, his
+"ALL Terasa"/"ALL Auta" (all three radios) were skipped at every start, and nobody who does not
+configure such groups notices anything. Groups are sorted smallest first (stable) so a
+smaller group wins a shared radio regardless of config order (mounts stay `grpN` by config
+index). Refused (new): a name another device has (own device, `group_name` with 2+ radios, an
+earlier group; case-insensitive). A missing member is still only warned about and the group is
+built from the radios found, if at least two of a multi-radio group are (as before); member names also match without diacritics. Each
+group costs a librespot + pacer + ffmpeg, running all the time. `_pro-kolegu/vlastni-verze-skupiny.md` (untracked fork notes) is obsolete.
 
 **The device set is fixed at start-up** (deliberate — the alternative churns processes). A radio
 that only turns up later on SlimProto is added to the inventory and follows the group zone, but

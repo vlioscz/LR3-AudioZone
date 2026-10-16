@@ -46,9 +46,26 @@ Pro rádio na terase přicházejí v úvahu:
 Každé z nich může znamenat jinou sadu reproduktorů. Senzor terasy vždy řekne, které právě
 hraje.
 
-> Skupina v hlavním addonu musí mít aspoň dvě rádia a nesmí obsahovat všechna (to je
-> „LARA All“). Dvě zařízení pro úplně stejnou sadu rádií tedy udělat nejde. Pro terasu
-> obvykle stačí rozlišit „jen terasa“ (vlastní zařízení) a „všude“ („LARA All“).
+Od verze **0.5.11** může skupina obsahovat i **jediné rádio** nebo **všechna rádia** a stejné
+rádio může být v kolika skupinách chceš. Pro terasu tak jde udělat třeba:
+
+```yaml
+groups:
+  - name: Terasa sezení        # jen terasa, jen reproduktory u sezení
+    radios: [Terasa]
+  - name: ALL Terasa           # celý dům + na terase všechny reproduktory
+    radios: [Koupelna, Obývák, Terasa]
+  - name: ALL Auta             # celý dům + na terase reproduktor u aut
+    radios: [Koupelna, Obývák, Terasa]
+```
+
+Každá skupina je ve Spotify samostatné zařízení a senzor terasy ukáže přesně jeho jméno.
+Když hrají dvě zařízení, která terasu obsahují, dostane ji to menší (vlastní zařízení
+rádia, pak skupiny od nejmenší, nakonec „LARA All“). Jméno skupiny nesmí mít jiné zařízení
+(vlastní zařízení rádia, „LARA All“ nebo jiná skupina), jinak ji addon přeskočí a v logu
+napíše proč. Každá skupina navíc pouští vlastní Spotify přehrávač, který běží pořád, takže
+s nimi neplýtvej. Do verze 0.5.10 musela mít skupina aspoň dvě rádia a nesměla obsahovat
+všechna.
 
 ## 3. Automatizace
 

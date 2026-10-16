@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.11
+
+- **A group may now hold a single radio, or every radio.** Each group is its own Spotify
+  device, and each radio's sensor in Home Assistant names the device it is playing — so one
+  LARA driving several speakers through relays can switch them by the device someone picks:
+  "Terrace – seating" with just the terrace, "Everywhere – cars" and "Everywhere – terrace"
+  with all the radios, and so on. Until now such groups were skipped at start-up (the log
+  said so, but nothing showed up in Spotify).
+- **When groups overlap, the smaller one wins** a radio they share, whatever order they are
+  listed in (before, the first listed won).
+- Radio names in a group may now be typed without diacritics ("Obyvak").
+- **New:** a group whose name another Spotify device already has (a radio's own device,
+  "LARA All", or an earlier group) is skipped, with the reason in the log — two devices of
+  one name cannot be told apart in the app.
+- Each group is a separate Spotify player that runs all the time (some CPU, and up to
+  `audio_cache_mb` of disk), so create only the ones you will use.
+
 ## 0.5.10
 
 - **Fixed: a radio could switch itself into the audio zone on its own.** When the connection

@@ -353,16 +353,54 @@ async def run():
     assert [z.name for z in bad.zones] == ["LARA Koupelna", "LARA Obývák", "LARA All"],         "a group with a missing member or no name must be dropped, not half-built"
     print("24) member names are matched loosely; a broken group is dropped with a warning")
 
-    # A group naming every radio is just "LARA All" wearing a different hat.
-    whole = mk({"groups": [{"name": "Vsechno", "radios": ["Koupelna", "Obývák"]}]},
-               radios=[(A, "Koupelna"), (B, "Obývák")])
-    assert [z.name for z in whole.zones] == ["LARA Koupelna", "LARA Obývák", "LARA All"],         [z.name for z in whole.zones]
-    # ...but the same two rooms out of three is a real group.
+    # Since 0.5.11 a group may be a second name for one radio, or for all of them, or for the
+    # same radios as another group: that is how a relay tells "terrace, seating only" from
+    # "terrace, every speaker" (the colleague's "ALL Terasa" / "ALL Auta" were refused until
+    # then). Only a name already taken is refused — two devices of one name are one to a person.
     C4 = "00:0a:59:11:22:55"
-    part = mk({"groups": [{"name": "Dovnitr", "radios": ["Koupelna", "Obývák"]}]},
-              radios=[(A, "Koupelna"), (B, "Obývák"), (C4, "Terasa")])
-    assert "Dovnitr" in [z.name for z in part.zones]
-    print("25) a group covering every radio is refused; a genuine subset is kept")
+    rooms = [(A, "Koupelna"), (B, "Obývák"), (C4, "Terasa")]
+    groups = [{"name": "ALL Terasa", "radios": ["Koupelna", "Obývák", "Terasa"]},
+              {"name": "ALL Auta", "radios": ["Koupelna", "Obývák", "Terasa"]},
+              {"name": "Terasa sezení", "radios": ["Terasa"]},
+              {"name": "LARA Terasa", "radios": ["Terasa"]},          # = the radio's own device
+              {"name": "lara all", "radios": ["Terasa", "Obývák"]},    # = the group device
+              {"name": "all auta", "radios": ["Terasa"]}]              # = an earlier group
+    said.clear(); h.setLevel(logging.INFO); C.log.addHandler(h)
+    many = mk({"groups": groups}, radios=rooms)
+    C.log.removeHandler(h); h.setLevel(logging.WARNING)
+    names = [z.name for z in many.zones]
+    assert names == ["LARA Koupelna", "LARA Obývák", "LARA Terasa", "Terasa sezení",
+                     "ALL Terasa", "ALL Auta", "LARA All"], names       # groups smallest first
+    assert sum("already exists" in s for s in said) == 3, said
+    assert any("'Terasa sezení'  (LARA Terasa)" in s for s in said), \
+        "a one-radio group's line names the radio, not its MAC"
+    t_all, t_auta, t_seat = (next(z for z in many.zones if z.name == n)
+                             for n in ("ALL Terasa", "ALL Auta", "Terasa sezení"))
+    assert sorted(t_auta.radios) == sorted([A, B, C4]) and t_seat.radios == [C4]
+    assert t_seat.mount == "grp3", "mounts keep the config index, so learned rates follow"
+    # precedence: own device > the smaller group > the bigger one > LARA All — whatever order
+    # the groups were listed in (a guest picking "Terasa sezení" while the house plays "ALL
+    # Auta" gets the terrace)
+    assert many.zone_for(C4, {"all", t_auta.mount, t_seat.mount}) == t_seat.mount
+    assert many.zone_for(C4, {"all", t_auta.mount}) == t_auta.mount
+    assert many.zone_for(C4, {"all", t_seat.mount, many.mount_for(C4)}) == many.mount_for(C4)
+    # ...and the terrace's sensor names whichever of them it plays
+    many.target[C4] = t_seat.mount
+    assert many.sensor_states()[C.Controller.sensor_id(C4)][0] == "Terasa sezení"
+    # a single radio may have a second name too (the colleague's other site has one LARA)
+    one = mk({"groups": [{"name": "Terasa relé", "radios": ["Terasa"]}]}, radios=[(C4, "Terasa")])
+    assert [z.name for z in one.zones] == ["LARA Terasa", "Terasa relé"]
+    # a radio that is not here is warned about and the group built from the others, as before
+    # 0.5.11 (a group that worked must not vanish because one radio was off at start-up); and
+    # nobody has to type the diacritics
+    half = mk({"groups": [{"name": "Tri", "radios": ["Koupelna", "Obyvak", "Sklep"]}]},
+              radios=rooms)
+    tri = next(z for z in half.zones if z.name == "Tri")
+    assert sorted(tri.radios) == sorted([A, B]), tri.radios
+    none = mk({"groups": [{"name": "Nic", "radios": ["Sklep"]}]}, radios=rooms)
+    assert "Nic" not in [z.name for z in none.zones]
+    print("25) groups of one radio, of all of them, or of the same radios under another name; "
+          "a taken name is refused")
 
     # The wobble this guards: moving a Spotify session between a radio's own device and the
     # group leaves both reporting "playing" for a second, so the choice flipped there and

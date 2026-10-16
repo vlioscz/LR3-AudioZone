@@ -25,6 +25,7 @@ import asyncio
 import base64
 import datetime
 import glob
+import unicodedata
 import json
 import logging
 import os
@@ -482,7 +483,7 @@ class Controller:
             # he was trying to work out why his groups behaved as they did.
             if z.is_group:
                 who = "všechna rádia"
-            elif len(z.radios) == 1:
+            elif len(z.radios) == 1 and z.mount == self.mount_for(z.radios[0]):
                 who = z.radios[0]
             else:
                 who = ", ".join(self.display_name(self.radios[m]["rec"], m) for m in z.radios)
@@ -499,19 +500,36 @@ class Controller:
         These sit **between** the per-radio zones and "LARA All" in `self.zones`, so the
         precedence reads the way people expect: your own room beats a small group, and a small
         group beats everything-at-once.
+
+        Since 0.5.11 a group may also hold a single radio, or all of them — a second name for
+        the same speakers, which is what a relay needs to tell "the terrace, seating only" from
+        "the terrace, all speakers" (the per-radio sensor reports which name is playing). Until
+        then those were refused, and a colleague's "ALL Terasa" / "ALL Auta" were skipped at
+        every start. Groups are ordered smallest first, so with several playing at once the
+        smaller one takes a radio they share, whatever order they were listed in. Refused: a
+        name already in use (two Connect devices of one name cannot be told apart).
         """
         def key(s: str) -> str:
-            s = (s or "").strip().lower()
+            # Case, the "LARA " prefix and diacritics ("Obyvak" for "Obývák") do not matter.
+            s = unicodedata.normalize("NFKD", (s or "").strip().lower())
+            s = "".join(ch for ch in s if not unicodedata.combining(ch))
             return s[5:].strip() if s.startswith("lara ") else s
 
         lookup = {key(n): m for n, m in by_name.items()}
         lookup.update({m.lower(): m for m in self.radios})
+        taken = {n.strip().lower() for n in by_name}
+        if len(self.radios) > 1:
+            taken.add(self.group_name.strip().lower())
         out: list[Zone] = []
         for i, g in enumerate(self.custom_groups):
             name = (g.get("name") or "").strip() if isinstance(g, dict) else ""
             members = g.get("radios") or [] if isinstance(g, dict) else []
             if not name:
                 log.warning("skipping group #%d: it has no name", i + 1)
+                continue
+            if name.lower() in taken:
+                log.warning("group %r: a Spotify device of that name already exists — two "
+                            "devices of one name cannot be told apart; skipping it", name)
                 continue
             macs, missing = [], []
             for want in members:
@@ -521,15 +539,20 @@ class Controller:
             if missing:
                 log.warning("group %r: no radio here is called %s — check the spelling against "
                             "the names in the log above", name, ", ".join(repr(m) for m in missing))
-            if len(macs) < 2:
-                log.warning("group %r needs at least two radios that exist; skipping it", name)
+            # As before 0.5.11: a group listing several radios is built from those found, as
+            # long as at least two are — one left would quietly become a one-room device.
+            if not macs or (len(members) > 1 and len(macs) < 2):
+                log.warning("group %r: too few of its radios are here — skipping it (the set "
+                            "of Spotify devices is fixed at start-up: restart the add-on once "
+                            "they are on the network)", name)
                 continue
-            if len(self.radios) > 1 and set(macs) == set(self.radios):
-                log.warning("group %r covers every radio, which is what %r already does — "
-                            "skipping it; a group is for picking *some* of the rooms",
-                            name, self.group_name)
-                continue
+            taken.add(name.lower())
             out.append(Zone(f"grp{i + 1}", name, macs))
+        # Smallest first (stable: equal sizes keep their order). zone_for takes the first
+        # active zone that covers a radio, so the more specific group wins a shared radio —
+        # with groups of every size allowed, config order would let "everywhere" swallow
+        # "terrace only". Mounts keep grpN by config index, so learned rates follow the group.
+        out.sort(key=lambda z: len(z.radios))
         return out
 
     def zone_for(self, mac: str, active: set[str]) -> str | None:
