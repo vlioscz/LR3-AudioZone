@@ -152,3 +152,11 @@ configuration:
     description: >-
       Optional list of LARA IP addresses for when auto-discovery (UDP broadcast)
       cannot find them — e.g. on a different subnet.
+  stream_watch:
+    name: Stream watch (diagnostic)
+    description: >-
+      Optional. Internet-radio addresses (http://… or https://…) the add-on downloads
+      continuously, logging every pause in the data of 2 s or more, slow delivery and every
+      dropped connection. For comparing with a radio that keeps "waiting": if the stream drops here
+      at the same moment, it is the network or the server, not the radio. Each address
+      downloads about 1.4 GB a day at 128 kbps — empty the list once you are done.

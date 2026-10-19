@@ -151,3 +151,11 @@ configuration:
     description: >-
       Volitelný seznam IP adres LARA rádií pro případ, že je automatické hledání
       (UDP broadcast) nenajde — např. v jiné podsíti.
+  stream_watch:
+    name: Sledování streamů (diagnostika)
+    description: >-
+      Nepovinné. Adresy internetových rádií (http://… nebo https://…), které má addon
+      nepřetržitě stahovat a do logu zapsat každou pauzu v datech od 2 s, pomalé doručování
+      a každé přerušené spojení. Slouží k porovnání s rádiem, které „čeká“: když stream ve stejnou chvíli
+      vypadne i tady, je to síť nebo server, ne rádio. Každá adresa stahuje při 128 kbit/s
+      asi 1,4 GB denně, po skončení zkoumání seznam vyprázdni.

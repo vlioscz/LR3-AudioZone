@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.13
+
+- **New diagnostic option `stream_watch`.** List internet-radio addresses (`http://…`) and
+  the add-on downloads them continuously from the Home Assistant box, logging every pause
+  in the data of 2 s or more (with its length), every stretch where data arrives slower than
+  the station plays, every dropped connection, and once an hour a short summary. Made for a radio that keeps showing "waiting" on its own station: if the
+  same stream stalls here at the same moment, the cause is the router, the line or the
+  station's server; if only the radio stalls, it is the radio. Off unless you fill it in.
+  Each address downloads about 1.4 GB a day at 128 kbps, so empty the list when you are
+  done. A malformed address is reported and skipped; it cannot stop the add-on.
+
 ## 0.5.12
 
 - **No more "insecure secrets" warning.** Home Assistant checks password options against

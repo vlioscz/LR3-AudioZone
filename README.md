@@ -100,6 +100,7 @@ The SlimProto port is 3483.
 | `lara_username` | `admin` | LARA user — only needed for `park_on_zone_off` (port 61695). |
 | `lara_password` | empty | LARA password, only for `park_on_zone_off`. Empty = the radio's factory password; fill it in only if you changed it on the radios. |
 | `lara_hosts` | `[]` | Manual LARA IPs for when the scan can't find them. |
+| `stream_watch` | `[]` | Diagnostic: internet-radio addresses (`http://…`) to download continuously, logging every pause of 2 s or more, slow delivery and every dropped connection — to tell a radio's own trouble from the network's. About 1.4 GB a day per address at 128 kbps; empty it when done. |
 
 > **Updating from 0.1.x?** The `fallback_enabled`, `fallback_url` and `fallback_delay` options
 > are gone. If the add-on complains about unknown options after updating, open its

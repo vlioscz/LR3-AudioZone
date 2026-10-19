@@ -95,6 +95,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `lara_username` | `admin` | Uživatel LARA — potřebný jen pro `park_on_zone_off` (port 61695). |
 | `lara_password` | prázdné | Heslo LARA, jen pro `park_on_zone_off`. Prázdné = tovární heslo rádia; vyplň, jen pokud ho máš v rádiích změněné. |
 | `lara_hosts` | `[]` | Ruční IP LARA, když je sken nenajde. |
+| `stream_watch` | `[]` | Diagnostika: adresy internetových rádií (`http://…`), které addon nepřetržitě stahuje a do logu zapisuje každou pauzu od 2 s, pomalé doručování a každé přerušené spojení — rozliší potíž rádia od potíže sítě. Asi 1,4 GB denně na adresu při 128 kbit/s; po skončení vyprázdni. |
 
 > **Aktualizuješ z 0.1.x?** Volby `fallback_enabled`, `fallback_url` a `fallback_delay` zmizely.
 > Pokud si addon po aktualizaci stěžuje na neznámé volby, otevři jeho **Configuration** a ulož ji

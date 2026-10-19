@@ -37,8 +37,8 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.12** (no leaked-password defaults; 0.5.11 groups of one/all/overlapping
-  radios; 0.5.10 a zone starts only on `playing`; 0.5.9 rate_match clean-up; 0.5.8 added
+- **Current version 0.5.13** (`stream_watch` diagnostic; 0.5.12 no leaked-password defaults;
+  0.5.11 groups of one/all/overlapping radios; 0.5.10 a zone starts only on `playing`; 0.5.9 rate_match clean-up; 0.5.8 added
   `sensor.lr3_audiozone`).
 - **Passwords (0.5.12).** The Supervisor's `app_pwned` check (daily) hashes every `password`
   option and looks it up in Have I Been Pwned; non-empty only. Our defaults were `changeme`
@@ -330,6 +330,18 @@ changes — Icecast gives a joining radio no burst (`burst-size 0`), so pushing 
 its own device now waits for the own session's `playing` + ZONE_SETTLE (~2 s more than 0.5.9);
 two pre-existing group/own-zone hand-over quirks (a stop on own device while /all plays, a
 failed track in an own session) are unchanged since 0.5.9.
+
+**`stream_watch` (0.5.13, diagnostic, off unless filled in).** `lr3ctl/streamwatch.py`: one
+daemon thread per URL downloads the stream from the HA box (plain socket, HTTP/1.0, IPv4 only
+like a radio) and logs pauses ≥ 2 s with their length, delivery < 90 % of `icy-br` over 10 s,
+dropped connections (GIVE_UP 30 s), a peer address on connect and an hourly summary.
+Built for site 5's "ČEKÁM…" (Obývák, Radiožurnál, 2026-10-19): HA shares the radio's switch
+and router, so a drop seen here at the same moment = router/line/server, only on the radio =
+the radio. Review fixes before release: a malformed URL used to raise in run() before the Slim
+servers started (now `check_url` + try/except — a diagnostic must never take the radios'
+server down), playlist URLs that hang up at once are backed off. ⚠️ Docker Desktop on the dev
+PC proxies port-80 HTTP: every stream answers 400 inside the test container — test it on the
+host, not in the image. ~1.4 GB/day per URL at 128 kbps.
 
 **The radios' rate is per session, not per radio** (site 5, same log): KP2 settled at −3250
 on 10-11 and at −1350 on 10-12, both with a steady 109 KB buffer; Obývák −3250 on 10-13. The

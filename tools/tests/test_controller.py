@@ -1326,6 +1326,25 @@ async def run():
         assert opt_line in manifest.splitlines(), opt_line
     print("54) no leaked-password defaults: a random Icecast password, the radios' factory login")
 
+    # stream_watch is a diagnostic: a typo in it must never stop the add-on (it ran before the
+    # Slim servers start, so one ValueError used to leave every radio without its server).
+    ctl = C.Controller({"stream_watch": ["http://82.99.175.141:8o/x.mp3", "ftp://h/x", " ", 7]})
+    said.clear(); h.setLevel(C.logging.INFO); C.log.addHandler(h)
+    try:
+        ctl.start_stream_watch()
+    finally:
+        C.log.removeHandler(h)
+    assert ctl.watchers is None and sum("stream_watch: ignoring" in s for s in said) == 2, said
+    real = C.streamwatch.Watchers
+    C.streamwatch.Watchers = lambda urls: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        ctl = C.Controller({"stream_watch": ["http://127.0.0.1:9/x.mp3"]})
+        ctl.start_stream_watch()                       # must not raise
+        assert ctl.watchers is None
+    finally:
+        C.streamwatch.Watchers = real
+    print("55) a broken stream_watch entry is reported and skipped, never fatal")
+
 
 asyncio.run(run())
 print("\nALL OK")

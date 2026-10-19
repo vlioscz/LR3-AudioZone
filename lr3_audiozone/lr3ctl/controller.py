@@ -40,6 +40,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import discovery  # noqa: E402
 import laradev  # noqa: E402
+import streamwatch  # noqa: E402
 from lmscli import DEFAULT_CLI_PORT, LmsCliServer  # noqa: E402
 from slimproto import SlimProtoServer  # noqa: E402
 from logtime import container_env, setup_logging  # noqa: E402
@@ -325,6 +326,10 @@ class Controller:
         self.user = opt(cfg, "lara_username", "admin") or "admin"
         self.password = opt(cfg, "lara_password", "") or "elkoep"
         self.hosts = opt(cfg, "lara_hosts", [])
+        # Diagnostic: internet-radio streams to watch from here (streamwatch.py); empty = off.
+        self.stream_watch = [u.strip() for u in (opt(cfg, "stream_watch", []) or [])
+                             if isinstance(u, str) and u.strip()]
+        self.watchers: streamwatch.Watchers | None = None
         self.subnet = (opt(cfg, "scan_subnet", "") or "").strip() or None
         self.port = opt(cfg, "port", 8121)
         # What run.sh gave Icecast — the option, or (empty, the default since 0.5.12) a random
@@ -1726,6 +1731,30 @@ class Controller:
                 if now - started >= self.idle_timeout:
                     await self.zone_off(key)
 
+    def start_stream_watch(self):
+        """Watch the listed streams from here (diagnostic, `stream_watch`; nothing if empty)."""
+        urls = []
+        for u in self.stream_watch:
+            why = streamwatch.check_url(u)
+            if why:
+                log.warning("stream_watch: ignoring %r — %s", u, why)
+            else:
+                urls.append(u)
+        if not urls:
+            return
+        # It is a real download, all the time: at 128 kbps about 1.4 GB a day per stream.
+        log.info("stream_watch: watching %d stream(s) from this box — every pause of %.0f s or "
+                 "more, slow delivery and every dropped connection is logged; ~%.1f GB/day "
+                 "of download at 128 kbps, so empty the list once you are done", len(urls),
+                 streamwatch.GAP, 1.4 * len(urls))
+        # A diagnostic must never be able to take the radios' Slim server down with it.
+        try:
+            self.watchers = streamwatch.Watchers(urls)
+            self.watchers.start()
+        except Exception:
+            log.exception("stream_watch could not start — the radios are not affected")
+            self.watchers = None
+
     # --- main loop -------------------------------------------------------------
     async def pause(self, stopping: asyncio.Event):
         """The second between two passes of the loop — cut short when Spotify starts playing.
@@ -1786,6 +1815,7 @@ class Controller:
                         "Assistant sensors are disabled", S6_ENV_DIRS[0])
         # In the background: a Supervisor that is slow to answer must not hold up the radios.
         slug_task = asyncio.create_task(self.learn_addon_slug())
+        self.start_stream_watch()
         if not self.remote_access:
             if not self.cred_cache_flag_ok:
                 log.warning("this librespot does not know --disable-credential-cache, so it "
@@ -1844,6 +1874,8 @@ class Controller:
         finally:
             self._stopping = True
             slug_task.cancel()
+            if self.watchers:
+                self.watchers.close()
             for t in list(self._probes):
                 t.cancel()
             if self.rate_match:
