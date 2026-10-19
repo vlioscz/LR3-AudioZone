@@ -37,8 +37,18 @@ stable stream + Spotify Connect. This repo owns everything about **driving LARA 
 - ✅ **In daily production use since 0.3.x** at three installations, two of them with three
   radios. Everything below ("what has not run on hardware") is long since obsolete: the whole
   Spotify-driven loop, multi-radio, groups and the idle→off machine all run in the field.
-- **Current version 0.5.11** (groups of one/all/overlapping radios; 0.5.10 a zone starts only
-  on `playing`; 0.5.9 rate_match clean-up; 0.5.8 added `sensor.lr3_audiozone`). 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
+- **Current version 0.5.12** (no leaked-password defaults; 0.5.11 groups of one/all/overlapping
+  radios; 0.5.10 a zone starts only on `playing`; 0.5.9 rate_match clean-up; 0.5.8 added
+  `sensor.lr3_audiozone`).
+- **Passwords (0.5.12).** The Supervisor's `app_pwned` check (daily) hashes every `password`
+  option and looks it up in Have I Been Pwned; non-empty only. Our defaults were `changeme`
+  (1.35 M breaches) and `elkoep` (864), so HA reported "insecure secrets" — and its offered
+  fix is EXECUTE_STOP, i.e. stopping the add-on (never recommend it). Now both default to ""
+  (`password?`): run.sh makes a random 36-hex `source_password` per start when empty and
+  exports it as `LR3_SOURCE_PASSWORD` (Icecast config, controller, pacer, Liquidsoap all use
+  it; verified in the image: admin 200 with it, 401 with `changeme`, pacer connected); an
+  empty `lara_password` means the factory `elkoep`, used only by `park_on_zone_off`. Saved
+  options survive updates, so existing installs must clear the two fields once. 0.5.0 replaced Liquidsoap in the zone path with `pacer.py` to
   fix the growing lag — **confirmed in the field 2026-10-10** (third-party install: backlog
   ±5 B/s, radio buffer 108–110 KB for hours, a 2 h 41 min session with no dropout, one push
   per room change). 0.5.1 makes the HA sensors actually appear (s6 token, see that section).

@@ -14,7 +14,15 @@ TPL_DIR=/etc/lr3
 log() { echo "[LR3AZ] $*"; }
 
 PORT=$(jq -r '.port // 8121' "$OPTIONS")
-SRCPASS=$(jq -r '.source_password // "changeme"' "$OPTIONS")
+SRCPASS=$(jq -r '.source_password // ""' "$OPTIONS")
+# Prázdné (výchozí od 0.5.12) = náhodné při každém startu. Znát ho nikdo nepotřebuje — rádia
+# ho nepoužívají, Icecast i controller ho dostanou odsud. Dřívější výchozí „changeme“ je
+# v databázi uniklých hesel, a Supervisor proto hlásil „nezabezpečená hesla“; navíc jím mohl
+# kdokoli v síti do Icecastu (zdroj i administrace). Jen hex: jde přes sed i do XML.
+if [ -z "$SRCPASS" ]; then
+  SRCPASS=$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')
+fi
+export LR3_SOURCE_PASSWORD="$SRCPASS"
 BITRATE=$(jq -r '.bitrate // 192' "$OPTIONS")
 SPOTIFY_BITRATE=$(jq -r '.spotify_bitrate // 320' "$OPTIONS")
 ZONE_NAME=$(jq -r '.zone_name // "Audio zóna"' "$OPTIONS")

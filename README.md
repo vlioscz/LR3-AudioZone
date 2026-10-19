@@ -78,7 +78,7 @@ The SlimProto port is 3483.
 | Option | Default | Description |
 |---|---|---|
 | `port` | `8121` | Icecast stream port (this is where the LARA fetches audio from). |
-| `source_password` | `changeme` | Icecast internal password. The LARA does not need it. |
+| `source_password` | empty | Icecast internal password (stream source and admin page). The LARA does not need it. Empty = a random one at every start; the old default `changeme` is on the leaked-password lists, which is why Home Assistant may report this add-on as using insecure secrets — clear the field. |
 | `bitrate` | `192` | Bitrate of the MP3 sent to the LARA (kbps). |
 | `spotify_bitrate` | `320` | Spotify quality (96/160/320). Needs Premium. |
 | `samplerate` | `48000` | **Leave this alone.** At 44100 every LARA measured consumes audio about 39 B/s faster than we can deliver it, so its buffer bleeds out and the music stops roughly every 26 minutes — whatever the buffer is set to. 48000 removes the mismatch; 44100 is kept only for comparison. |
@@ -98,7 +98,7 @@ The SlimProto port is 3483.
 | `cli_port` | `9595` | LMS CLI port — must match "CLI port" in the LARA's configuration. |
 | `cli_username` / `cli_password` | empty | Login the LARA sends on the CLI. Leave empty if it has none. |
 | `lara_username` | `admin` | LARA user — only needed for `park_on_zone_off` (port 61695). |
-| `lara_password` | `elkoep` | LARA password. |
+| `lara_password` | empty | LARA password, only for `park_on_zone_off`. Empty = the radio's factory password; fill it in only if you changed it on the radios. |
 | `lara_hosts` | `[]` | Manual LARA IPs for when the scan can't find them. |
 
 > **Updating from 0.1.x?** The `fallback_enabled`, `fallback_url` and `fallback_delay` options

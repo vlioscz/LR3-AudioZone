@@ -7,8 +7,8 @@ configuration:
   source_password:
     name: Heslo zdroje (interní)
     description: >-
-      Interní heslo Icecastu, kterým Liquidsoap publikuje stream, a heslo do
-      Icecast admin stránky. LARA ho NEPOTŘEBUJE. Klidně nech výchozí.
+      Interní heslo Icecastu (publikování streamu a jeho administrace). LARA ho
+      NEPOTŘEBUJE. Nech prázdné: addon si při každém startu vymyslí náhodné.
   bitrate:
     name: Výstupní bitrate (kbps)
     description: Bitrate MP3 streamu posílaného do LARA, v kbps (např. 128, 192, 320).
@@ -143,7 +143,9 @@ configuration:
       po skončení Spotify — ten jde po portu 61695, který ověřování vyžaduje.
   lara_password:
     name: LARA — heslo
-    description: Heslo k LARA rádiím (výchozí „elkoep"). Viz uživatel výše.
+    description: >-
+      Heslo k LARA rádiím, jen pro návrat na seznam stanic (port 61695). Prázdné = tovární
+      heslo rádia. Vyplň, jen pokud ho máš v rádiích změněné.
   lara_hosts:
     name: LARA — ruční IP
     description: >-

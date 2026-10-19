@@ -7,8 +7,8 @@ configuration:
   source_password:
     name: Source password (internal)
     description: >-
-      Internal Icecast password Liquidsoap uses to publish the stream, and the
-      Icecast admin password. LARA does NOT need it. You can leave the default.
+      Internal Icecast password (publishing the stream and its admin page). LARA does
+      NOT need it. Leave it empty: the add-on makes up a random one at every start.
   bitrate:
     name: Output bitrate (kbps)
     description: Bitrate of the MP3 stream sent to LARA, in kbps (e.g. 128, 192, 320).
@@ -144,7 +144,9 @@ configuration:
       station list when Spotify stops - that goes over port 61695, which requires auth.
   lara_password:
     name: LARA password
-    description: Password for the LARA radios (default "elkoep"). See the username above.
+    description: >-
+      Password for the LARA radios, only for the switch back to the station list (port
+      61695). Empty = the radio's factory password. Fill it in only if you changed it.
   lara_hosts:
     name: LARA manual IPs
     description: >-

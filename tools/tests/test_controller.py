@@ -1297,6 +1297,35 @@ async def run():
     print("53) a new `playing` cuts the loop's pause short; a stop right after a pause in the app "
           "leaves that session alone")
 
+    # 0.5.12: no leaked-password defaults (the Supervisor flagged "changeme" / "elkoep" as
+    # insecure secrets). Icecast's password is whatever run.sh configured it with — the option,
+    # or a random one when the option is empty; the radios' login falls back to the factory one.
+    saved_env = os.environ.pop("LR3_SOURCE_PASSWORD", None)
+    try:
+        os.environ["LR3_SOURCE_PASSWORD"] = "0f1e2d3c4b5a69788796a5b4c3d2e1f0abcd"
+        ctl = mk({"source_password": ""}, radios=[(A, "Koupelna")])
+        assert ctl.source_password == "0f1e2d3c4b5a69788796a5b4c3d2e1f0abcd"
+        cfg = __import__("json").load(open(ctl.write_pacer_config(ctl.zones[0]), encoding="utf-8"))
+        assert cfg["source_password"] == ctl.source_password, "the pacer gets the same one"
+        os.environ["LR3_SOURCE_PASSWORD"] = "mine"                # run.sh exports the option too
+        assert C.Controller({"source_password": "mine"}).source_password == "mine"
+        del os.environ["LR3_SOURCE_PASSWORD"]
+        assert C.Controller({"source_password": "x"}).source_password == "x"
+        assert C.Controller({}).source_password == "changeme", "only without run.sh (tests)"
+    finally:
+        os.environ.pop("LR3_SOURCE_PASSWORD", None)
+        if saved_env is not None:
+            os.environ["LR3_SOURCE_PASSWORD"] = saved_env
+    lara = C.Controller({"lara_password": "", "lara_username": ""})
+    assert (lara.user, lara.password) == ("admin", "elkoep"), "empty = the radios' factory login"
+    lara = C.Controller({"lara_password": "tajne", "lara_username": "jan"})
+    assert (lara.user, lara.password) == ("jan", "tajne")
+    manifest = open(os.path.join(REPO, "lr3_audiozone", "config.yaml"), encoding="utf-8").read()
+    for opt_line in ('  source_password: ""', '  lara_password: ""',
+                     "  source_password: password?", "  lara_password: password?"):
+        assert opt_line in manifest.splitlines(), opt_line
+    print("54) no leaked-password defaults: a random Icecast password, the radios' factory login")
+
 
 asyncio.run(run())
 print("\nALL OK")

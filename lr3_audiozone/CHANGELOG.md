@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.12
+
+- **No more "insecure secrets" warning.** Home Assistant checks password options against
+  lists of leaked passwords, and the add-on's defaults were on them: `changeme` (the
+  internal Icecast password) and `elkoep` (the radios' factory password). Both fields are
+  now empty by default. An empty `source_password` makes the add-on use a random one, new
+  at every start — nothing needs to know it, the radios do not use it. An empty
+  `lara_password` means the radios' factory password, used only by `park_on_zone_off`.
+- **If you see the warning now, clear both fields in the add-on's configuration** (or
+  set your own) and restart the add-on — an update never changes options you have saved.
+  Do **not** use the "fix" Home Assistant offers for it: that stops the add-on.
+- `changeme` also let anyone on your network into the Icecast server (feed a zone or
+  disconnect the radios); a random password closes that too.
+
 ## 0.5.11
 
 - **A group may now hold a single radio, or every radio.** Each group is its own Spotify

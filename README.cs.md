@@ -73,7 +73,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | Volba | Výchozí | Popis |
 |---|---|---|
 | `port` | `8121` | Port Icecast streamu (odsud si LARA stáhne zvuk). |
-| `source_password` | `changeme` | Interní heslo Icecastu. LARA ho nepotřebuje. |
+| `source_password` | prázdné | Interní heslo Icecastu (publikování streamu a administrace). LARA ho nepotřebuje. Prázdné = náhodné při každém startu. Dřívější výchozí `changeme` je v databázi uniklých hesel, a proto může HA hlásit, že addon používá nezabezpečená hesla — pole vymaž. |
 | `bitrate` | `192` | Bitrate MP3 posílaného do LARA (kbps). |
 | `spotify_bitrate` | `320` | Kvalita Spotify (96/160/320). Vyžaduje Premium. |
 | `samplerate` | `48000` | **Nech být.** Při 44100 každá změřená LARA spotřebovává zvuk asi o 39 B/s rychleji, než ho stíháme dodávat — buffer se jí vypustí a hudba se zhruba po 26 minutách zastaví, ať je buffer nastavený jakkoli. 48000 ten nesoulad maže; 44100 zůstává jen kvůli srovnání. |
@@ -93,7 +93,7 @@ přihlášení admin/heslo) → sekce **„Audio zone function"**. Port SlimProt
 | `cli_port` | `9595` | Port LMS CLI — musí sedět s „CLI port" v konfiguraci LARY. |
 | `cli_username` / `cli_password` | prázdné | Přihlášení, které LARA na CLI posílá. Nech prázdné, pokud žádné nemá. |
 | `lara_username` | `admin` | Uživatel LARA — potřebný jen pro `park_on_zone_off` (port 61695). |
-| `lara_password` | `elkoep` | Heslo LARA. |
+| `lara_password` | prázdné | Heslo LARA, jen pro `park_on_zone_off`. Prázdné = tovární heslo rádia; vyplň, jen pokud ho máš v rádiích změněné. |
 | `lara_hosts` | `[]` | Ruční IP LARA, když je sken nenajde. |
 
 > **Aktualizuješ z 0.1.x?** Volby `fallback_enabled`, `fallback_url` a `fallback_delay` zmizely.

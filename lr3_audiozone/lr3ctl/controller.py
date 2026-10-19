@@ -319,12 +319,18 @@ class Controller:
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.mode = opt(cfg, "control_mode", "slimproto")
-        self.user = opt(cfg, "lara_username", "admin")
-        self.password = opt(cfg, "lara_password", "elkoep")
+        # The radios' factory login unless set; only park_on_zone_off uses it (port 61695).
+        # Empty by default since 0.5.12: "elkoep" stored in the options is on the leaked-
+        # password lists, and the Supervisor flagged the add-on as using insecure secrets.
+        self.user = opt(cfg, "lara_username", "admin") or "admin"
+        self.password = opt(cfg, "lara_password", "") or "elkoep"
         self.hosts = opt(cfg, "lara_hosts", [])
         self.subnet = (opt(cfg, "scan_subnet", "") or "").strip() or None
         self.port = opt(cfg, "port", 8121)
-        self.source_password = opt(cfg, "source_password", "changeme")
+        # What run.sh gave Icecast — the option, or (empty, the default since 0.5.12) a random
+        # one made at start-up. "changeme" only for a controller run without run.sh (tests).
+        self.source_password = (os.environ.get("LR3_SOURCE_PASSWORD")
+                                or opt(cfg, "source_password", "") or "changeme")
         self.spotify_bitrate = opt(cfg, "spotify_bitrate", 320)
         self.remote_access = bool(opt(cfg, "spotify_remote_access", False))
         # 48000 by default: at 44.1 kHz every LARA measured so far drains its input buffer at a
